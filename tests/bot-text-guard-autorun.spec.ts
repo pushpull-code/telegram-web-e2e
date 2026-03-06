@@ -55,6 +55,15 @@ const JOIN_TASK_ERROR_RETRY_COUNT = 2;
 const JOIN_TASK_NO_TASK_RETRY_COUNT = 2;
 const JOIN_TASK_NO_TASK_RETRY_DELAY_MS = 5_000;
 const MAX_PHOTO_CYCLES = 1;
+const REPORT_STEP_LIMIT = 6;
+const REPORT_STEP_PATTERNS = [
+  /^start-language-(ru|en)$/,
+  /^platform-set$/,
+  /^after-join$/,
+  /^photo-prompt-\d+$/,
+  /^after-finish-click-\d+$/,
+  /^completion$/
+];
 
 const LANGUAGE_PROMPT_ANCHORS = ["Выберите язык интерфейса", "Choose interface language"];
 const LANGUAGE_BUTTON_BY_LANG = {
@@ -179,6 +188,10 @@ function reportableFailure(code: string, message: string): Error {
   const error = new Error(`REPORT_REASON:${code}:${message}`);
   error.name = "ScenarioAbortError";
   return error;
+}
+
+function shouldCaptureReportStep(label: string): boolean {
+  return REPORT_STEP_PATTERNS.some((pattern) => pattern.test(label));
 }
 
 async function waitTailContainsAny(page: Page, anchors: string[], timeout = STEP_TIMEOUT_MS): Promise<string[]> {
@@ -587,6 +600,12 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
   let completionReached = false;
   let reportStepIndex = 0;
   const reportStep = async (label: string) => {
+    if (!shouldCaptureReportStep(label)) {
+      return;
+    }
+    if (reportStepIndex >= REPORT_STEP_LIMIT) {
+      return;
+    }
     reportStepIndex += 1;
     await captureReportStep(page, testInfo, reportStepIndex, label);
   };

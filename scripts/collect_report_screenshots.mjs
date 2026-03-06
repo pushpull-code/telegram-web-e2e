@@ -3,7 +3,7 @@ import path from "node:path";
 
 const OUTPUT_PATH = process.argv[2] || ".cloudflare-report-screenshots.json";
 const ROOTS = ["test-results", "playwright-report"];
-const MAX_FILES = Number(process.env.REPORT_SCREENSHOT_MAX || "30");
+const MAX_FILES = Number(process.env.REPORT_SCREENSHOT_MAX || "6");
 const MAX_FILE_BYTES = Number(process.env.REPORT_SCREENSHOT_MAX_FILE_BYTES || "3000000");
 
 function walkFiles(dir, out = []) {
