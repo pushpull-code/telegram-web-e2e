@@ -176,11 +176,15 @@ async function loadState(env, chatId) {
     return { lang: null };
   }
 
-  const raw = await env.BOT_STATE_KV.get(`chat:${chatId}`, "json");
-  if (raw && typeof raw === "object") {
-    return {
-      lang: raw.lang === LANG_EN || raw.lang === LANG_RU ? raw.lang : null
-    };
+  try {
+    const raw = await env.BOT_STATE_KV.get(`chat:${chatId}`, { type: "json" });
+    if (raw && typeof raw === "object") {
+      return {
+        lang: raw.lang === LANG_EN || raw.lang === LANG_RU ? raw.lang : null
+      };
+    }
+  } catch (error) {
+    console.error("loadState failed", error);
   }
   return { lang: null };
 }
@@ -191,7 +195,11 @@ async function saveState(env, chatId, patch) {
   }
   const current = await loadState(env, chatId);
   const next = { ...current, ...patch, lang: normalizeLang(patch.lang || current.lang || LANG_RU) };
-  await env.BOT_STATE_KV.put(`chat:${chatId}`, JSON.stringify(next));
+  try {
+    await env.BOT_STATE_KV.put(`chat:${chatId}`, JSON.stringify(next));
+  } catch (error) {
+    console.error("saveState failed", error);
+  }
 }
 
 function isChatAllowed(env, chatId) {
@@ -427,66 +435,70 @@ async function handleTelegramWebhook(env, request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const update = await request.json().catch(() => null);
-  if (!update || typeof update !== "object") {
-    return new Response("Invalid JSON", { status: 400 });
-  }
-
-  if (update.callback_query) {
-    await handleCallbackQuery(env, update.callback_query);
-    return new Response("ok");
-  }
-
-  const message = update.message;
-  const chatId = normalizeChatId(message?.chat?.id);
-  const text = String(message?.text || "").trim();
-
-  if (!chatId || !text) {
-    return new Response("ok");
-  }
-
-  if (!isChatAllowed(env, chatId)) {
-    await sendMessage(env, chatId, t(LANG_RU, "ignoredChat"));
-    return new Response("ok");
-  }
-
-  if (/^\/start\b/i.test(text)) {
-    await handleStart(env, chatId);
-    return new Response("ok");
-  }
-
-  if (/^\/language\b/i.test(text)) {
-    await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
-    return new Response("ok");
-  }
-
-  if (/^\/run\b/i.test(text)) {
-    const state = await loadState(env, chatId);
-    const lang = normalizeLang(state.lang || LANG_RU);
-    try {
-      const runUrl = await dispatchGithubRun(env, {
-        chatId,
-        lang,
-        scenarioKey: SCENARIO_START_FINISH
-      });
-      await sendMessage(
-        env,
-        chatId,
-        [t(lang, "launchStarted"), `${t(lang, "launchLink")} ${runUrl}`, t(lang, "launchWaitReport")].join("\n")
-      );
-    } catch (error) {
-      console.error("dispatch /run failed", error);
-      await sendMessage(env, chatId, t(lang, "launchFailed"));
+  try {
+    const update = await request.json().catch(() => null);
+    if (!update || typeof update !== "object") {
+      return new Response("Invalid JSON", { status: 400 });
     }
-    return new Response("ok");
-  }
 
-  const state = await loadState(env, chatId);
-  if (!state.lang) {
-    await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
-    return new Response("ok");
+    if (update.callback_query) {
+      await handleCallbackQuery(env, update.callback_query);
+      return new Response("ok");
+    }
+
+    const message = update.message;
+    const chatId = normalizeChatId(message?.chat?.id);
+    const text = String(message?.text || "").trim();
+
+    if (!chatId || !text) {
+      return new Response("ok");
+    }
+
+    if (!isChatAllowed(env, chatId)) {
+      await sendMessage(env, chatId, t(LANG_RU, "ignoredChat"));
+      return new Response("ok");
+    }
+
+    if (/^\/start\b/i.test(text)) {
+      await handleStart(env, chatId);
+      return new Response("ok");
+    }
+
+    if (/^\/language\b/i.test(text)) {
+      await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
+      return new Response("ok");
+    }
+
+    if (/^\/run\b/i.test(text)) {
+      const state = await loadState(env, chatId);
+      const lang = normalizeLang(state.lang || LANG_RU);
+      try {
+        const runUrl = await dispatchGithubRun(env, {
+          chatId,
+          lang,
+          scenarioKey: SCENARIO_START_FINISH
+        });
+        await sendMessage(
+          env,
+          chatId,
+          [t(lang, "launchStarted"), `${t(lang, "launchLink")} ${runUrl}`, t(lang, "launchWaitReport")].join("\n")
+        );
+      } catch (error) {
+        console.error("dispatch /run failed", error);
+        await sendMessage(env, chatId, t(lang, "launchFailed"));
+      }
+      return new Response("ok");
+    }
+
+    const state = await loadState(env, chatId);
+    if (!state.lang) {
+      await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
+      return new Response("ok");
+    }
+    await showScenarioMenu(env, chatId, normalizeLang(state.lang), false);
+  } catch (error) {
+    console.error("handleTelegramWebhook failed", error);
   }
-  await showScenarioMenu(env, chatId, normalizeLang(state.lang), false);
   return new Response("ok");
 }
 
