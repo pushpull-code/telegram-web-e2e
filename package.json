@@ -12,6 +12,9 @@
     "test:settings": "playwright test tests/bot-settings-flow.spec.ts --project=chromium",
     "test:settings:headed": "playwright test tests/bot-settings-flow.spec.ts --project=chromium --headed",
     "log:manual-flow": "node scripts/manual_flow_logger.js",
+    "log:manual-flow:start": "node scripts/manual_flow_logger_runner.js start",
+    "log:manual-flow:stop": "node scripts/manual_flow_logger_runner.js stop",
+    "log:manual-flow:status": "node scripts/manual_flow_logger_runner.js status",
     "test:all": "playwright test --project=chromium",
     "test:headed": "playwright test tests/bot-flow.spec.ts --project=chromium --headed"
   },

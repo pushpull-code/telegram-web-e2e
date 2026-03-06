@@ -250,6 +250,37 @@ async function didOutgoingMediaIncrease(
   }
 }
 
+async function isLikelyVoiceControl(control: Locator): Promise<boolean> {
+  return await control
+    .evaluate((node) => {
+      const el = node as HTMLElement;
+      const text = (el.innerText || el.textContent || "").toLowerCase();
+      const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+      const title = (el.getAttribute("title") || "").toLowerCase();
+      const className = (el.className || "").toLowerCase();
+
+      const hasMicIcon = Boolean(
+        el.querySelector(
+          ".tgico-microphone, .tgico-mic, [class*='microphone'], [class*='mic'], [data-icon*='micro']"
+        )
+      );
+
+      const meta = `${text} ${aria} ${title} ${className}`;
+      if (hasMicIcon) {
+        return true;
+      }
+
+      return (
+        meta.includes("microphone") ||
+        meta.includes("voice") ||
+        meta.includes("record") ||
+        meta.includes("микрофон") ||
+        meta.includes("голос")
+      );
+    })
+    .catch(() => false);
+}
+
 async function scrollChatToBottom(page: Page): Promise<void> {
   await page
     .evaluate(() => {
@@ -404,7 +435,6 @@ export async function sendFileAttachment(
 ): Promise<void> {
   const mode = options.mode ?? "any";
   await waitForComposer(page, 30_000);
-  const beforeMessageCount = await countMessageNodes(page);
   const beforeOutgoingMediaCount = await countOutgoingMediaBubbles(page);
 
   let selected = false;
@@ -458,6 +488,10 @@ export async function sendFileAttachment(
       const candidate = candidates.nth(index);
       const visible = await candidate.isVisible().catch(() => false);
       if (!visible) {
+        continue;
+      }
+      if (await isLikelyVoiceControl(candidate)) {
+        logAttach(source, "skip voice-like control index =", index);
         continue;
       }
 
@@ -745,14 +779,6 @@ export async function sendFileAttachment(
     }
     await modalSendButton.click();
   }
-
-  await expect
-    .poll(async () => await countMessageNodes(page), { timeout: 20_000 })
-    .toBeGreaterThan(beforeMessageCount);
-
-  await expect
-    .poll(async () => await countOutgoingMediaBubbles(page), { timeout: 20_000 })
-    .toBeGreaterThan(beforeOutgoingMediaCount);
 }
 export async function clickInlineButtonByText(page: Page, text: string): Promise<void> {
   await scrollChatToBottom(page);

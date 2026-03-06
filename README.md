@@ -159,6 +159,20 @@ npm run test:autorun:text -- --project=chromium
 
 For Linux CI, `xclip` is required for clipboard-based photo fallback (installed in workflow).
 
+Manual flow logger (for hand-driven bot scenario with timeline + screenshots):
+
+```bash
+npm run log:manual-flow:start
+npm run log:manual-flow:status
+npm run log:manual-flow:stop
+```
+
+Foreground mode (blocks terminal until timeout):
+
+```bash
+npm run log:manual-flow
+```
+
 ## Notes
 
 - Tests are tied to message text anchors (as requested), not hardcoded step IDs.
