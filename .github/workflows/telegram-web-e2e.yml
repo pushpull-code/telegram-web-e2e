@@ -95,6 +95,8 @@ jobs:
         if: ${{ inputs.suite == 'autorun' || inputs.suite == 'all' }}
         env:
           E2E_APP_SCREENSHOT_PATH: tests/fixtures/Screenshot_1.png
+          E2E_BOT_LANG: ${{ inputs.lang }}
+          E2E_FORCE_CLEAN_START: "1"
         run: xvfb-run -a npm run test:autorun:text -- --headed
 
       - name: Run freelancer tests

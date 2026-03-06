@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const OUTPUT_PATH = process.argv[2] || ".cloudflare-report-screenshots.json";
 const ROOTS = ["test-results", "playwright-report"];
@@ -61,6 +62,7 @@ function gatherCandidates() {
 function collectScreenshots() {
   const candidates = gatherCandidates();
   const selected = [];
+  const seenHashes = new Set();
   let totalBase64Chars = 0;
 
   for (const item of candidates) {
@@ -72,6 +74,10 @@ function collectScreenshots() {
     }
 
     const buffer = fs.readFileSync(item.filePath);
+    const hash = crypto.createHash("sha1").update(buffer).digest("hex");
+    if (seenHashes.has(hash)) {
+      continue;
+    }
     const dataBase64 = buffer.toString("base64");
     if (totalBase64Chars + dataBase64.length > MAX_TOTAL_BASE64_CHARS) {
       continue;
@@ -82,6 +88,7 @@ function collectScreenshots() {
       mime_type: mimeByFile(item.filePath),
       data_base64: dataBase64
     });
+    seenHashes.add(hash);
     totalBase64Chars += dataBase64.length;
   }
 

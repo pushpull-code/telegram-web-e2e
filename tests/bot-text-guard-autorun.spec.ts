@@ -44,6 +44,8 @@ const screenshotFixture = (() => {
 })();
 
 const skipFinalDelete = process.env.E2E_SKIP_DELETE_ME === "1";
+const desiredBotLang = (process.env.E2E_BOT_LANG || "ru").trim().toLowerCase() === "en" ? "en" : "ru";
+const forceCleanStart = process.env.E2E_FORCE_CLEAN_START === "1";
 
 const TAIL_LIMIT = 160;
 const STEP_TIMEOUT_MS = 70_000;
@@ -52,6 +54,12 @@ const JOIN_TASK_NO_TASK_RETRY_COUNT = 2;
 const JOIN_TASK_NO_TASK_RETRY_DELAY_MS = 5_000;
 const MAX_PHOTO_CYCLES = 1;
 
+const LANGUAGE_PROMPT_ANCHORS = ["Выберите язык интерфейса", "Choose interface language"];
+const LANGUAGE_BUTTON_BY_LANG = {
+  ru: "Русский",
+  en: "English"
+} as const;
+
 const START_ANCHORS = [
   'Нажми "Я готов"',
   'Нажми "Я готов!"',
@@ -59,6 +67,12 @@ const START_ANCHORS = [
   "Проверьте доступные задания",
   "Выберите страну",
   "Какой у вас телефон",
+  "Hey, champion!",
+  "Hit \"I’m ready\" to start!",
+  "Hit \"I'm ready\" to start!",
+  "Earn up to $7 in 10 minutes"
+];
+const ENGLISH_START_ONLY_ANCHORS = [
   "Hey, champion!",
   "Hit \"I’m ready\" to start!",
   "Hit \"I'm ready\" to start!",
@@ -300,6 +314,25 @@ async function hasActiveTaskCard(page: Page): Promise<boolean> {
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
+async function startWithDesiredLanguage(page: Page): Promise<void> {
+  const startTail = await sendCommandAndWaitForAnchors(
+    page,
+    "/start",
+    [...LANGUAGE_PROMPT_ANCHORS, ...START_ANCHORS],
+    45_000
+  );
+
+  if (containsAny(startTail, LANGUAGE_PROMPT_ANCHORS)) {
+    await clickInlineButtonByText(page, LANGUAGE_BUTTON_BY_LANG[desiredBotLang]);
+    await waitTailContainsAny(page, START_ANCHORS, 45_000);
+    return;
+  }
+
+  if (desiredBotLang === "ru" && containsAny(startTail, ENGLISH_START_ONLY_ANCHORS)) {
+    throw new Error("Scenario stopped: bot returned English start flow while Russian flow was required.");
+  }
+}
+
 async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
   const anchors = [...JOIN_TASK_ANCHORS, ...JOIN_TASK_ERROR_ANCHORS];
   let lastAfterJoin: string[] = [];
@@ -457,12 +490,12 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => 
     await openBotChat(page, botUsername);
 
     // Reset only if chat context indicates previous bot flow state.
-    if (await shouldSendReset(page)) {
+    if (forceCleanStart || (await shouldSendReset(page))) {
       await sendCommandAndWaitForAnchors(page, "/deleteme", DELETE_ME_ANCHORS, 40_000).catch(() => {});
       await page.waitForTimeout(1_200);
     }
 
-    await sendCommandAndWaitForAnchors(page, "/start", START_ANCHORS, 45_000);
+    await startWithDesiredLanguage(page);
 
     if (await hasAnyInlineButton(page, READY_BUTTON_LABELS)) {
       await clickAnyInlineButton(page, READY_BUTTON_LABELS);
