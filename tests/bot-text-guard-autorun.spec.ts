@@ -261,6 +261,24 @@ async function waitForTailChangeAndAnchors(
   return matchedTail;
 }
 
+async function waitForTailChange(page: Page, beforeFingerprint: string, timeout = STEP_TIMEOUT_MS): Promise<string[]> {
+  let changedTail: string[] = [];
+  await expect
+    .poll(
+      async () => {
+        const tail = await collectTailMessages(page, TAIL_LIMIT);
+        if (tail.join("\n@@\n") === beforeFingerprint) {
+          return false;
+        }
+        changedTail = tail;
+        return true;
+      },
+      { timeout }
+    )
+    .toBeTruthy();
+  return changedTail;
+}
+
 async function clickAnyInlineButton(page: Page, labels: string[]): Promise<string> {
   for (const label of labels) {
     if (await hasInlineButton(page, label)) {
@@ -308,17 +326,22 @@ async function hasActiveTaskCard(page: Page): Promise<boolean> {
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
-async function startWithDesiredLanguage(page: Page): Promise<"ru" | "en"> {
+async function startWithDesiredLanguage(
+  page: Page,
+  onBotResponse?: (label: string) => Promise<void>
+): Promise<"ru" | "en"> {
   const startTail = await sendCommandAndWaitForAnchors(
     page,
     "/start",
     [...LANGUAGE_PROMPT_ANCHORS, ...START_ANCHORS],
     45_000
   );
+  await onBotResponse?.("after-start");
 
   if (containsAny(startTail, LANGUAGE_PROMPT_ANCHORS)) {
     await clickInlineButtonByText(page, LANGUAGE_BUTTON_BY_LANG[desiredBotLang]);
     const afterLanguageChoice = await waitTailContainsAny(page, START_ANCHORS, 45_000);
+    await onBotResponse?.(`after-language-${desiredBotLang}`);
     return containsAny(afterLanguageChoice, ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"])
       ? "en"
       : "ru";
@@ -382,7 +405,11 @@ async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
   return lastAfterJoin;
 }
 
-async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<void> {
+async function reachScreenshotPrompt(
+  page: Page,
+  onBotResponse?: (label: string) => Promise<void>,
+  timeout = 120_000
+): Promise<void> {
   const startedAt = Date.now();
   let lastAction: "submit" | "yes" | "next" | "belarus" | null = null;
   let lastActionFingerprint = "";
@@ -406,6 +433,8 @@ async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<voi
       !(lastAction === "submit" && lastActionFingerprint === fingerprint)
     ) {
       await clickAnyInlineButton(page, SUBMIT_BUTTON_LABELS);
+      await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
+      await onBotResponse?.("after-submit-click");
       lastAction = "submit";
       lastActionFingerprint = fingerprint;
       await page.waitForTimeout(2_000);
@@ -418,6 +447,8 @@ async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<voi
       !(lastAction === "yes" && lastActionFingerprint === fingerprint)
     ) {
       await clickAnyInlineButton(page, YES_BUTTON_LABELS);
+      await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
+      await onBotResponse?.("after-yes-click");
       lastAction = "yes";
       lastActionFingerprint = fingerprint;
       await page.waitForTimeout(2_000);
@@ -429,6 +460,8 @@ async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<voi
       !(lastAction === "belarus" && lastActionFingerprint === fingerprint)
     ) {
       await clickInlineButtonByText(page, "Belarus");
+      await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
+      await onBotResponse?.("after-belarus-click");
       lastAction = "belarus";
       lastActionFingerprint = fingerprint;
       await page.waitForTimeout(800);
@@ -440,6 +473,8 @@ async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<voi
       !(lastAction === "next" && lastActionFingerprint === fingerprint)
     ) {
       await clickAnyInlineButton(page, NEXT_BUTTON_LABELS);
+      await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
+      await onBotResponse?.("after-next-click");
       lastAction = "next";
       lastActionFingerprint = fingerprint;
       await page.waitForTimeout(1_200);
@@ -454,7 +489,11 @@ async function reachScreenshotPrompt(page: Page, timeout = 120_000): Promise<voi
   throw new Error("Could not reach screenshot prompt in time.");
 }
 
-async function waitForCompletionOrFinish(page: Page, timeout = 45_000): Promise<boolean> {
+async function waitForCompletionOrFinish(
+  page: Page,
+  onBotResponse?: (label: string) => Promise<void>,
+  timeout = 45_000
+): Promise<boolean> {
   const startedAt = Date.now();
   let lastFinishFingerprint = "";
 
@@ -468,6 +507,8 @@ async function waitForCompletionOrFinish(page: Page, timeout = 45_000): Promise<
     const finishVisible = await hasAnyInlineButton(page, FINISH_BUTTON_LABELS);
     if (finishVisible && lastFinishFingerprint !== fingerprint) {
       await clickAnyInlineButton(page, FINISH_BUTTON_LABELS);
+      await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
+      await onBotResponse?.("after-finish-click");
       lastFinishFingerprint = fingerprint;
       await page.waitForTimeout(1_500);
       continue;
@@ -504,12 +545,18 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
 
     // Reset only if chat context indicates previous bot flow state.
     if (forceCleanStart || (await shouldSendReset(page))) {
-      await sendCommandAndWaitForAnchors(page, "/deleteme", DELETE_ME_ANCHORS, 40_000).catch(() => {});
+      await sendCommandAndWaitForAnchors(page, "/deleteme", DELETE_ME_ANCHORS, 40_000)
+        .then(async () => {
+          await reportStep("after-reset");
+        })
+        .catch(() => {});
       await page.waitForTimeout(1_200);
     }
 
-    const actualStartLanguage = await startWithDesiredLanguage(page);
-    await reportStep(`start-${actualStartLanguage}`);
+    const actualStartLanguage = await startWithDesiredLanguage(page, async (label) => {
+      await reportStep(label);
+    });
+    await reportStep(`start-language-${actualStartLanguage}`);
 
     if (await hasAnyInlineButton(page, READY_BUTTON_LABELS)) {
       await clickAnyInlineButton(page, READY_BUTTON_LABELS);
@@ -521,6 +568,7 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
 
     if (!taskAlreadyActive) {
       await sendCommandAndWaitForAnchors(page, "/settings", SETTINGS_MENU_ANCHORS, 45_000);
+      await reportStep("after-settings-country");
       await clickAnyInlineButton(page, CHANGE_COUNTRY_BUTTON_LABELS);
       await waitAnyInlineButton(page, ["Belarus"], 20_000);
       await clickInlineButtonByText(page, "Belarus");
@@ -528,6 +576,7 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
       await reportStep("country-set");
 
       await sendCommandAndWaitForAnchors(page, "/settings", SETTINGS_MENU_ANCHORS, 45_000);
+      await reportStep("after-settings-platform");
       await clickAnyInlineButton(page, CHANGE_PLATFORM_BUTTON_LABELS);
       await waitAnyInlineButton(page, ["Android"], 20_000);
       await clickInlineButtonByText(page, "Android");
@@ -554,7 +603,9 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
     let photoResponseObserved = false;
 
     for (let cycle = 1; cycle <= MAX_PHOTO_CYCLES && !completionReached; cycle++) {
-      await reachScreenshotPrompt(page);
+      await reachScreenshotPrompt(page, async (label) => {
+        await reportStep(`${label}-${cycle}`);
+      });
       await reportStep(`photo-prompt-${cycle}`);
 
       const before = await collectTailMessages(page, TAIL_LIMIT);
@@ -577,7 +628,13 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
         break;
       }
 
-      const completionAfterFinish = await waitForCompletionOrFinish(page, 45_000);
+      const completionAfterFinish = await waitForCompletionOrFinish(
+        page,
+        async (label) => {
+          await reportStep(`${label}-${cycle}`);
+        },
+        45_000
+      );
       if (completionAfterFinish) {
         completionReached = true;
         await reportStep("completion");
@@ -592,7 +649,11 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
   } finally {
     // Strict text-driven cleanup: send /deleteme only after confirmed completion branch.
     if (!skipFinalDelete && completionReached) {
-      await sendCommandAndWaitForAnchors(page, "/deleteme", DELETE_ME_ANCHORS, 40_000).catch(() => {});
+      await sendCommandAndWaitForAnchors(page, "/deleteme", DELETE_ME_ANCHORS, 40_000)
+        .then(async () => {
+          await reportStep("after-delete");
+        })
+        .catch(() => {});
     }
   }
 });

@@ -434,6 +434,7 @@ async function handleGithubReport(env, request) {
   const runUrl = String(payload.run_url || "");
   const duration = formatDuration(Number(payload.duration_sec || 0));
   const statusLine = runStatusText(lang, payload.status || "failure");
+  const phase = String(payload.phase || "single").trim().toLowerCase();
 
   const reportText = [
     t(lang, "reportTitle"),
@@ -445,29 +446,42 @@ async function handleGithubReport(env, request) {
     .filter(Boolean)
     .join("\n");
 
-  await sendMessage(env, chatId, reportText);
+  if (phase === "summary" || phase === "single") {
+    await sendMessage(env, chatId, reportText);
+  }
+  if (phase === "summary") {
+    return new Response("ok");
+  }
 
   const screenshots = Array.isArray(payload.screenshots) ? payload.screenshots : [];
-  for (let i = 0; i < screenshots.length; i += 1) {
-    const item = screenshots[i];
-    const b64 = String(item?.data_base64 || "");
-    if (!b64) {
-      continue;
-    }
-    try {
-      const bytes = decodeBase64(b64);
-      if (bytes.length === 0) {
+  if (phase === "screenshots" || phase === "single") {
+    for (let i = 0; i < screenshots.length; i += 1) {
+      const item = screenshots[i];
+      const b64 = String(item?.data_base64 || "");
+      if (!b64) {
         continue;
       }
-      const filename = String(item?.name || `screenshot-${i + 1}.png`);
-      const caption = i === 0 ? `${t(lang, "reportTitle")}: ${scenarioTitle(lang, scenarioKey)}` : "";
-      await sendPhoto(env, chatId, bytes, filename, caption);
-    } catch (error) {
-      console.error("sendPhoto from report failed", error);
+      try {
+        const bytes = decodeBase64(b64);
+        if (bytes.length === 0) {
+          continue;
+        }
+        const filename = String(item?.name || `screenshot-${i + 1}.png`);
+        const caption = phase === "single" && i === 0 ? `${t(lang, "reportTitle")}: ${scenarioTitle(lang, scenarioKey)}` : "";
+        await sendPhoto(env, chatId, bytes, filename, caption);
+      } catch (error) {
+        console.error("sendPhoto from report failed", error);
+      }
+    }
+    if (phase === "screenshots") {
+      return new Response("ok");
     }
   }
 
-  await sendMessage(env, chatId, t(lang, "askRunAgain"), rerunKeyboard(lang));
+  if (phase === "finish" || phase === "single") {
+    await sendMessage(env, chatId, t(lang, "askRunAgain"), rerunKeyboard(lang));
+  }
+
   return new Response("ok");
 }
 

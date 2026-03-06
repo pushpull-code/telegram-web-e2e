@@ -1,12 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 
 const OUTPUT_PATH = process.argv[2] || ".cloudflare-report-screenshots.json";
 const ROOTS = ["test-results", "playwright-report"];
-const MAX_FILES = Number(process.env.REPORT_SCREENSHOT_MAX || "8");
-const MAX_FILE_BYTES = 1_500_000;
-const MAX_TOTAL_BASE64_CHARS = 4_000_000;
+const MAX_FILES = Number(process.env.REPORT_SCREENSHOT_MAX || "30");
+const MAX_FILE_BYTES = Number(process.env.REPORT_SCREENSHOT_MAX_FILE_BYTES || "3000000");
 
 function walkFiles(dir, out = []) {
   if (!fs.existsSync(dir)) {
@@ -75,8 +73,8 @@ function gatherCandidates() {
 function collectScreenshots() {
   const candidates = gatherCandidates();
   const selected = [];
-  const seenHashes = new Set();
-  let totalBase64Chars = 0;
+  const dedupeFallbackScreenshots = !candidates.some((item) => item.reportStep);
+  const seenFileKeys = new Set();
 
   for (const item of candidates) {
     if (selected.length >= MAX_FILES) {
@@ -87,22 +85,18 @@ function collectScreenshots() {
     }
 
     const buffer = fs.readFileSync(item.filePath);
-    const hash = crypto.createHash("sha1").update(buffer).digest("hex");
-    if (seenHashes.has(hash)) {
+    const dedupeKey = dedupeFallbackScreenshots ? `${item.size}:${path.basename(item.filePath)}` : item.filePath;
+    if (seenFileKeys.has(dedupeKey)) {
       continue;
     }
     const dataBase64 = buffer.toString("base64");
-    if (totalBase64Chars + dataBase64.length > MAX_TOTAL_BASE64_CHARS) {
-      continue;
-    }
 
     selected.push({
       name: path.basename(item.filePath),
       mime_type: mimeByFile(item.filePath),
       data_base64: dataBase64
     });
-    seenHashes.add(hash);
-    totalBase64Chars += dataBase64.length;
+    seenFileKeys.add(dedupeKey);
   }
 
   return selected;
