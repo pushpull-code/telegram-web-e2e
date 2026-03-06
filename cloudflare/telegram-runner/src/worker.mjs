@@ -4,26 +4,26 @@ const SCENARIO_START_FINISH = "start_finish";
 
 const TEXT = {
   [LANG_RU]: {
-    chooseLanguage: "Выберите язык интерфейса:",
-    languageSaved: "Язык сохранен.",
-    chooseScenario: "Выберите сценарий прогона:",
-    scenarioStartFinish: "1. Старт - Финиш (задача выполнена)",
-    launchStarted: "Запустил прогон теста через Telegram Web.",
-    launchLink: "Ссылка на прогон:",
-    launchWaitReport: "После завершения пришлю отчет.",
-    launchFailed: "Не удалось запустить прогон. Проверь настройки GitHub/Cloudflare secrets.",
-    reportTitle: "Отчет по прогону",
-    reportScenario: "Сценарий",
-    reportStatus: "Статус",
-    reportDuration: "Время",
-    reportLink: "Ссылка",
-    reportStatusSuccess: "Успешно",
-    reportStatusFailure: "Ошибка",
-    reportStatusCancelled: "Отменен",
-    askRunAgain: "Хотите запустить новый тест?",
-    runAgain: "Запустить новый тест",
-    runStartedToast: "Запускаю прогон...",
-    ignoredChat: "Этот бот доступен только в разрешенном чате."
+    chooseLanguage: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u044f\u0437\u044b\u043a \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0430:",
+    languageSaved: "\u042f\u0437\u044b\u043a \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d.",
+    chooseScenario: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 \u043f\u0440\u043e\u0433\u043e\u043d\u0430:",
+    scenarioStartFinish: "1. \u0421\u0442\u0430\u0440\u0442 - \u0424\u0438\u043d\u0438\u0448 (\u0437\u0430\u0434\u0430\u0447\u0430 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0430)",
+    launchStarted: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u043b \u043f\u0440\u043e\u0433\u043e\u043d \u0442\u0435\u0441\u0442\u0430 \u0447\u0435\u0440\u0435\u0437 Telegram Web.",
+    launchLink: "\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 \u043f\u0440\u043e\u0433\u043e\u043d:",
+    launchWaitReport: "\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u043f\u0440\u0438\u0448\u043b\u044e \u043e\u0442\u0447\u0435\u0442.",
+    launchFailed: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043f\u0440\u043e\u0433\u043e\u043d. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 GitHub/Cloudflare secrets.",
+    reportTitle: "\u041e\u0442\u0447\u0435\u0442 \u043f\u043e \u043f\u0440\u043e\u0433\u043e\u043d\u0443",
+    reportScenario: "\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439",
+    reportStatus: "\u0421\u0442\u0430\u0442\u0443\u0441",
+    reportDuration: "\u0412\u0440\u0435\u043c\u044f",
+    reportLink: "\u0421\u0441\u044b\u043b\u043a\u0430",
+    reportStatusSuccess: "\u0423\u0441\u043f\u0435\u0448\u043d\u043e",
+    reportStatusFailure: "\u041e\u0448\u0438\u0431\u043a\u0430",
+    reportStatusCancelled: "\u041e\u0442\u043c\u0435\u043d\u0435\u043d",
+    askRunAgain: "\u0425\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442?",
+    runAgain: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442",
+    runStartedToast: "\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u043f\u0440\u043e\u0433\u043e\u043d...",
+    ignoredChat: "\u042d\u0442\u043e\u0442 \u0431\u043e\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u043d\u043e\u043c \u0447\u0430\u0442\u0435."
   },
   [LANG_EN]: {
     chooseLanguage: "Choose interface language:",
@@ -150,7 +150,7 @@ function languageKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: "Русский", callback_data: "lang:ru" },
+        { text: "\u0420\u0443\u0441\u0441\u043a\u0438\u0439", callback_data: "lang:ru" },
         { text: "English", callback_data: "lang:en" }
       ]
     ]
