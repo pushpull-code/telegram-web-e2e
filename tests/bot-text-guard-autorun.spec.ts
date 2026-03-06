@@ -56,7 +56,11 @@ const START_ANCHORS = [
   "Привет",
   "Проверьте доступные задания",
   "Выберите страну",
-  "Какой у вас телефон"
+  "Какой у вас телефон",
+  "Hey, champion!",
+  "Hit \"I’m ready\" to start!",
+  "Hit \"I'm ready\" to start!",
+  "Earn up to $7 in 10 minutes"
 ];
 
 const READY_BUTTON_LABELS = ["Я готов!", "Я готов", "Участвовать", "I'm ready!", "I’m ready!"];
