@@ -194,14 +194,33 @@ function shouldCaptureReportStep(label: string): boolean {
   return REPORT_STEP_PATTERNS.some((pattern) => pattern.test(label));
 }
 
+function normalizeTailMessage(message: string): string {
+  return String(message || "").trim().toLowerCase();
+}
+
+function sliceToCurrentSession(messages: string[]): string[] {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = normalizeTailMessage(messages[index]);
+    if (message.startsWith("/start")) {
+      return messages.slice(index);
+    }
+  }
+  return messages;
+}
+
+async function collectCurrentSessionTail(page: Page, limit = TAIL_LIMIT): Promise<string[]> {
+  const tail = await collectTailMessages(page, limit);
+  return sliceToCurrentSession(tail);
+}
+
 async function waitTailContainsAny(page: Page, anchors: string[], timeout = STEP_TIMEOUT_MS): Promise<string[]> {
   const startedAt = Date.now();
-  let lastFingerprint = (await collectTailMessages(page, TAIL_LIMIT)).join("\n@@\n");
+  let lastFingerprint = (await collectCurrentSessionTail(page, TAIL_LIMIT)).join("\n@@\n");
   let lastActivityAt = Date.now();
   let changedSinceStart = false;
 
   while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
-    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
     const fingerprint = tail.join("\n@@\n");
     if (fingerprint !== lastFingerprint) {
       lastFingerprint = fingerprint;
@@ -290,7 +309,7 @@ async function waitForTailChangeAndAnchors(
   let changedSinceStart = false;
 
   while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
-    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
     const fingerprint = tail.join("\n@@\n");
     if (fingerprint !== lastFingerprint) {
       lastFingerprint = fingerprint;
@@ -322,7 +341,7 @@ async function waitForTailChange(page: Page, beforeFingerprint: string, timeout 
   let lastActivityAt = Date.now();
 
   while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
-    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
     const fingerprint = tail.join("\n@@\n");
     if (fingerprint !== lastFingerprint) {
       lastFingerprint = fingerprint;
@@ -382,11 +401,7 @@ async function hasAnyInlineButton(page: Page, labels: string[]): Promise<boolean
 }
 
 async function hasActiveTaskCard(page: Page): Promise<boolean> {
-  if (await hasAnyInlineButton(page, ACTIVE_TASK_BUTTON_LABELS)) {
-    return true;
-  }
-
-  const tail = await collectTailMessages(page, TAIL_LIMIT);
+  const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
@@ -436,7 +451,7 @@ async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
 
   for (let attempt = 1; attempt <= JOIN_TASK_ERROR_RETRY_COUNT + JOIN_TASK_NO_TASK_RETRY_COUNT + 1; attempt++) {
     if (await hasActiveTaskCard(page)) {
-      return await collectTailMessages(page, TAIL_LIMIT);
+      return await collectCurrentSessionTail(page, TAIL_LIMIT);
     }
 
     lastAfterJoin = await sendCommandAndWaitForAnchors(page, "/join_task", anchors, 80_000);
@@ -479,7 +494,7 @@ async function reachScreenshotPrompt(
   let lastActionFingerprint = "";
 
   while (Date.now() - startedAt < timeout) {
-    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
     const fingerprint = tail.slice(-8).join("\n@@\n");
 
     if (containsAny(tail, SCREENSHOT_PROMPT_ANCHORS) || containsAny(tail, INVALID_SCREENSHOT_ANCHORS)) {
@@ -562,7 +577,7 @@ async function waitForCompletionOrFinish(
   let lastFinishFingerprint = "";
 
   while (Date.now() - startedAt < timeout) {
-    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
     if (containsAny(tail, COMPLETION_ANCHORS)) {
       return true;
     }
@@ -679,7 +694,7 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
       });
       await reportStep(`photo-prompt-${cycle}`);
 
-      const before = await collectTailMessages(page, TAIL_LIMIT);
+      const before = await collectCurrentSessionTail(page, TAIL_LIMIT);
       const beforeFingerprint = before.join("\n@@\n");
 
       await sendFileAttachment(page, screenshotFixture, { mode: "photo" });
@@ -690,7 +705,7 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
         photoResponseObserved = true;
         await reportStep(`after-photo-${cycle}`);
       } catch {
-        afterPhoto = await collectTailMessages(page, TAIL_LIMIT);
+        afterPhoto = await collectCurrentSessionTail(page, TAIL_LIMIT);
       }
 
       if (containsAny(afterPhoto, COMPLETION_ANCHORS)) {
