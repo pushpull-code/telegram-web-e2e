@@ -1,0 +1,23 @@
+{
+  "name": "telegram-web-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser E2E tests for Telegram bot @artp345_bot",
+  "scripts": {
+    "auth": "playwright test tests/auth.setup.ts --project=setup",
+    "test": "playwright test",
+    "test:bot": "playwright test tests/bot-flow.spec.ts --project=chromium",
+    "test:freelancer": "playwright test tests/bot-freelancer.spec.ts --project=chromium",
+    "test:autorun:text": "playwright test tests/bot-text-guard-autorun.spec.ts --project=chromium",
+    "test:settings": "playwright test tests/bot-settings-flow.spec.ts --project=chromium",
+    "test:settings:headed": "playwright test tests/bot-settings-flow.spec.ts --project=chromium --headed",
+    "log:manual-flow": "node scripts/manual_flow_logger.js",
+    "test:all": "playwright test --project=chromium",
+    "test:headed": "playwright test tests/bot-flow.spec.ts --project=chromium --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}

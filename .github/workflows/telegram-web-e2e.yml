@@ -1,0 +1,95 @@
+name: Telegram Web E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Test suite to run (bot | autorun | freelancer | settings | all)'
+        required: false
+        default: 'bot'
+  schedule:
+    - cron: "0 5 * * *"
+
+concurrency:
+  group: telegram-web-e2e
+  cancel-in-progress: false
+
+jobs:
+  run-tests:
+    name: Run Playwright Bot E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      BOT_USERNAME: ${{ vars.BOT_USERNAME }}
+      TELEGRAM_WEB_URL: ${{ vars.TELEGRAM_WEB_URL }}
+      TELEGRAM_STORAGE_STATE_B64: ${{ secrets.TELEGRAM_STORAGE_STATE_B64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Linux clipboard tools (autorun suite)
+        if: ${{ inputs.suite == 'autorun' || inputs.suite == 'all' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xclip
+
+      - name: Restore Telegram auth storage state
+        shell: bash
+        run: |
+          if [ -z "${TELEGRAM_STORAGE_STATE_B64:-}" ]; then
+            echo "::error::Missing secret TELEGRAM_STORAGE_STATE_B64. Generate it from playwright/.auth/user.json and add to repository secrets."
+            exit 1
+          fi
+
+          mkdir -p playwright/.auth
+          printf '%s' "$TELEGRAM_STORAGE_STATE_B64" | base64 --decode > playwright/.auth/user.json
+
+          node -e "JSON.parse(require('fs').readFileSync('playwright/.auth/user.json', 'utf8')); console.log('Auth state restored');"
+
+      - name: Run bot tests
+        if: ${{ !inputs.suite || inputs.suite == 'bot' || inputs.suite == 'all' }}
+        run: npm run test:bot
+
+      - name: Run strict autorun bot test
+        if: ${{ inputs.suite == 'autorun' || inputs.suite == 'all' }}
+        env:
+          E2E_APP_SCREENSHOT_PATH: tests/fixtures/Screenshot_1.png
+        run: xvfb-run -a npm run test:autorun:text -- --headed
+
+      - name: Run freelancer tests
+        if: ${{ inputs.suite == 'freelancer' || inputs.suite == 'all' }}
+        run: npm run test:freelancer
+
+      - name: Run settings-flow tests
+        if: ${{ inputs.suite == 'settings' || inputs.suite == 'all' }}
+        run: npm run test:settings
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 14

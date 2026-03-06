@@ -1,0 +1,8 @@
+node_modules/
+playwright-report/
+test-results/
+playwright/.auth/
+output/
+.qoder/
+.tmp_tweb_src/
+tmp-*.png
