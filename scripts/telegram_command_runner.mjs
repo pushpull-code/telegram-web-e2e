@@ -148,12 +148,22 @@ async function triggerWorkflow(suite) {
 }
 
 async function main() {
-  const updates = await tgGet("getUpdates", {
-    offset: "-1",
-    limit: "1",
-    timeout: "0",
-    allowed_updates: JSON.stringify(["message"])
-  });
+  let updates = [];
+  try {
+    updates = await tgGet("getUpdates", {
+      offset: "-1",
+      limit: "1",
+      timeout: "0",
+      allowed_updates: JSON.stringify(["message"])
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("can't use getUpdates method while webhook is active")) {
+      console.log("Telegram webhook is active. Skip polling workflow.");
+      return;
+    }
+    throw error;
+  }
 
   if (!Array.isArray(updates) || updates.length === 0) {
     console.log("No new Telegram messages.");
@@ -217,4 +227,3 @@ main().catch(async (error) => {
   console.error(error);
   process.exit(1);
 });
-
