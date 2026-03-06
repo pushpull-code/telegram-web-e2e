@@ -6,3 +6,5 @@ output/
 .qoder/
 .tmp_tweb_src/
 tmp-*.png
+.cloudflare-report-screenshots.json
+cloudflare/telegram-runner/.wrangler/

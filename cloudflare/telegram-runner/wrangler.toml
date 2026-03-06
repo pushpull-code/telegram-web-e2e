@@ -1,0 +1,14 @@
+name = "telegram-e2e-runner-bot"
+main = "src/worker.mjs"
+compatibility_date = "2026-03-06"
+
+kv_namespaces = [
+  { binding = "BOT_STATE_KV", id = "4dfcd4fc0c8a464fb006e939e206a290", preview_id = "24b98905bf4a4906b120961b909f88f6" }
+]
+
+[vars]
+GITHUB_WORKFLOW_FILE = "telegram-web-e2e.yml"
+GITHUB_REF = "main"
+DEFAULT_SUITE = "autorun"
+GITHUB_OWNER = "pushpull-code"
+GITHUB_REPO = "telegram-web-e2e"

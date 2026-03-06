@@ -7,6 +7,22 @@ on:
         description: 'Test suite to run (bot | autorun | freelancer | settings | all)'
         required: false
         default: 'bot'
+      chat_id:
+        description: 'Telegram chat id for Cloudflare report callback (optional)'
+        required: false
+        default: ''
+      lang:
+        description: 'Report language (ru | en)'
+        required: false
+        default: 'ru'
+      scenario_key:
+        description: 'Scenario key for report'
+        required: false
+        default: 'start_finish'
+      report_callback_url:
+        description: 'Override Cloudflare report callback URL (optional)'
+        required: false
+        default: ''
   schedule:
     - cron: "0 5 * * *"
 
@@ -24,8 +40,19 @@ jobs:
       BOT_USERNAME: ${{ vars.BOT_USERNAME }}
       TELEGRAM_WEB_URL: ${{ vars.TELEGRAM_WEB_URL }}
       TELEGRAM_STORAGE_STATE_B64: ${{ secrets.TELEGRAM_STORAGE_STATE_B64 }}
+      RUN_CHAT_ID: ${{ inputs.chat_id }}
+      RUN_LANG: ${{ inputs.lang }}
+      RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
+      RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
+      SCREENSHOTS_FILE: .cloudflare-report-screenshots.json
 
     steps:
+      - name: Mark run start timestamp
+        id: started
+        shell: bash
+        run: |
+          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -93,3 +120,34 @@ jobs:
           name: playwright-test-results
           path: test-results/
           retention-days: 14
+
+      - name: Calculate run duration
+        if: always()
+        id: duration
+        shell: bash
+        run: |
+          now="$(date +%s)"
+          started="${{ steps.started.outputs.epoch }}"
+          if [ -z "$started" ]; then
+            started="$now"
+          fi
+          echo "seconds=$((now - started))" >> "$GITHUB_OUTPUT"
+
+      - name: Collect screenshots for Cloudflare report
+        if: always()
+        run: node scripts/collect_report_screenshots.mjs "${SCREENSHOTS_FILE}"
+
+      - name: Send Cloudflare report callback
+        if: ${{ always() && env.RUN_CHAT_ID != '' }}
+        env:
+          CALLBACK_URL: ${{ env.RUN_REPORT_CALLBACK_URL }}
+          CALLBACK_URL_FALLBACK: ${{ vars.CLOUDFLARE_REPORT_URL }}
+          CALLBACK_TOKEN: ${{ secrets.CLOUDFLARE_REPORT_TOKEN }}
+          CHAT_ID: ${{ env.RUN_CHAT_ID }}
+          RUN_LANG: ${{ env.RUN_LANG }}
+          RUN_SCENARIO_KEY: ${{ env.RUN_SCENARIO_KEY }}
+          RUN_STATUS: ${{ job.status }}
+          RUN_DURATION_SEC: ${{ steps.duration.outputs.seconds }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCREENSHOTS_FILE: ${{ env.SCREENSHOTS_FILE }}
+        run: node scripts/send_cloudflare_report.mjs

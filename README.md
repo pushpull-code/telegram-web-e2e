@@ -200,3 +200,33 @@ Bot commands:
 - Scenario cleanup ends with `/deleteme` as the final command.
 - Keep this test account dedicated for automation to reduce noise in chat history.
 - Scenario-level coverage plan is documented in `BOT_TEST_MATRIX_2026-02-22.md`.
+
+## Cloudflare Telegram Runner Bot (RU/EN)
+
+New Cloudflare Worker implementation is available in:
+
+- `cloudflare/telegram-runner`
+
+Features:
+
+- `/start` -> language selection (`Русский` / `English`)
+- language preference persisted in Cloudflare KV
+- scenario menu (currently one scenario): `Старт - Финиш (задача выполнена)`
+- starts `telegram-web-e2e.yml` through GitHub `workflow_dispatch`
+- sends run link immediately
+- sends final report after completion:
+  - scenario name
+  - status
+  - duration
+  - run URL
+  - up to 3 screenshots
+- asks whether to run a new test
+
+Setup instructions:
+
+- `cloudflare/telegram-runner/README.md`
+
+GitHub callback settings (required for final report delivery):
+
+- Secret: `CLOUDFLARE_REPORT_TOKEN`
+- Variable: `CLOUDFLARE_REPORT_URL` (example: `https://<worker-domain>/github/report`)
