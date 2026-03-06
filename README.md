@@ -173,6 +173,24 @@ Foreground mode (blocks terminal until timeout):
 npm run log:manual-flow
 ```
 
+Telegram bot trigger for GitHub Actions (`/run <suite>`):
+
+- Workflow: `.github/workflows/telegram-bot-dispatch.yml`
+- Polling interval: every 5 minutes
+- Supported suites: `bot`, `autorun`, `freelancer`, `settings`, `all`
+
+Required repository secrets/variables:
+
+- Secret: `TG_BOT_TOKEN` (Telegram bot token from BotFather)
+- Variable: `TG_ALLOWED_CHAT_ID` (only this chat can trigger runs)
+- Optional variable: `TG_BOT_USERNAME` (default: `autotesttgbot`)
+
+Bot commands:
+
+- `/run <suite>` — trigger `telegram-web-e2e.yml`
+- `/run` — trigger default suite (`autorun`)
+- `/help` — show available commands
+
 ## Notes
 
 - Tests are tied to message text anchors (as requested), not hardcoded step IDs.

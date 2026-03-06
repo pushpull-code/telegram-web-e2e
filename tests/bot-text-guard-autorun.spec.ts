@@ -105,7 +105,9 @@ const SUBMIT_BUTTON_LABELS = ["Завершить задачу", "Finish task"];
 const ACTIVE_TASK_ANCHORS = [
   "Вы зарегистрировались для выполнения задания",
   "You have been registered for the task",
+  "ID:",
   "Статус: В процессе",
+  "Статус:В процессе",
   "Status: In progress",
   "Этапы выполнения"
 ];
@@ -294,9 +296,8 @@ async function hasActiveTaskCard(page: Page): Promise<boolean> {
     return true;
   }
 
-  const tail = await collectTailMessages(page, Math.min(TAIL_LIMIT, 40));
-  const recentTail = tail.slice(-18);
-  return containsAny(recentTail, ACTIVE_TASK_ANCHORS);
+  const tail = await collectTailMessages(page, TAIL_LIMIT);
+  return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
 async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
@@ -306,6 +307,10 @@ async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
   let noTaskRetriesLeft = JOIN_TASK_NO_TASK_RETRY_COUNT;
 
   for (let attempt = 1; attempt <= JOIN_TASK_ERROR_RETRY_COUNT + JOIN_TASK_NO_TASK_RETRY_COUNT + 1; attempt++) {
+    if (await hasActiveTaskCard(page)) {
+      return await collectTailMessages(page, TAIL_LIMIT);
+    }
+
     lastAfterJoin = await sendCommandAndWaitForAnchors(page, "/join_task", anchors, 80_000);
     const hasError = containsAny(lastAfterJoin, JOIN_TASK_ERROR_ANCHORS);
     if (hasError) {

@@ -1,0 +1,39 @@
+name: Telegram Bot Dispatch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: telegram-bot-dispatch
+  cancel-in-progress: false
+
+jobs:
+  poll-and-dispatch:
+    name: Poll Telegram Command
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Poll Telegram and trigger workflow
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_ALLOWED_CHAT_ID: ${{ vars.TG_ALLOWED_CHAT_ID }}
+          TG_BOT_USERNAME: ${{ vars.TG_BOT_USERNAME }}
+          E2E_WORKFLOW_FILE: telegram-web-e2e.yml
+          E2E_DEFAULT_SUITE: autorun
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/telegram_command_runner.mjs
+
