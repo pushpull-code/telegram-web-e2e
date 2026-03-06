@@ -155,6 +155,14 @@ async function answerCallback(env, callbackQueryId, text) {
   });
 }
 
+async function safeAnswerCallback(env, callbackQueryId, text) {
+  try {
+    await answerCallback(env, callbackQueryId, text);
+  } catch (error) {
+    console.error("safeAnswerCallback failed", error);
+  }
+}
+
 async function sendPhoto(env, chatId, bytes, filename, caption) {
   const form = new FormData();
   form.set("chat_id", String(chatId));
@@ -167,26 +175,27 @@ async function sendPhoto(env, chatId, bytes, filename, caption) {
 
 function languageKeyboard() {
   return {
-    inline_keyboard: [
-      [
-        { text: "\u0420\u0443\u0441\u0441\u043a\u0438\u0439", callback_data: "lang:ru" },
-        { text: "English", callback_data: "lang:en" }
-      ]
-    ]
+    keyboard: [[{ text: "\u0420\u0443\u0441\u0441\u043a\u0438\u0439" }, { text: "English" }]],
+    resize_keyboard: true,
+    one_time_keyboard: true
   };
 }
 
 function scenarioKeyboard(lang) {
+  const command = lang === LANG_EN ? "/run en" : "/run ru";
   return {
-    inline_keyboard: [
-      [{ text: scenarioTitle(lang, SCENARIO_START_FINISH), callback_data: `scenario:${SCENARIO_START_FINISH}` }]
-    ]
+    keyboard: [[{ text: command }]],
+    resize_keyboard: true,
+    one_time_keyboard: true
   };
 }
 
 function rerunKeyboard(lang) {
+  const command = lang === LANG_EN ? "/run en" : "/run ru";
   return {
-    inline_keyboard: [[{ text: t(lang, "runAgain"), callback_data: "run_new" }]]
+    keyboard: [[{ text: command }]],
+    resize_keyboard: true,
+    one_time_keyboard: true
   };
 }
 
@@ -236,8 +245,9 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
   const suite = String(env.DEFAULT_SUITE || "autorun").trim();
   const ref = String(env.GITHUB_REF || "main").trim();
   const reportCallbackUrl = String(env.REPORT_CALLBACK_URL || "").trim();
+  const githubToken = String(env.GITHUB_PAT || "").trim();
 
-  if (!owner || !repo || !env.GITHUB_PAT) {
+  if (!owner || !repo || !githubToken) {
     throw new Error("Missing GITHUB_OWNER/GITHUB_REPO/GITHUB_PAT");
   }
 
@@ -259,8 +269,9 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
     {
       method: "POST",
       headers: {
-        authorization: `Bearer ${env.GITHUB_PAT}`,
+        authorization: `Bearer ${githubToken}`,
         accept: "application/vnd.github+json",
+        "user-agent": "telegram-e2e-runner-bot",
         "x-github-api-version": "2022-11-28",
         "content-type": "application/json"
       },
@@ -285,8 +296,9 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
       )}/runs?event=workflow_dispatch&branch=${encodeURIComponent(ref)}&per_page=10`,
       {
         headers: {
-          authorization: `Bearer ${env.GITHUB_PAT}`,
+          authorization: `Bearer ${githubToken}`,
           accept: "application/vnd.github+json",
+          "user-agent": "telegram-e2e-runner-bot",
           "x-github-api-version": "2022-11-28"
         }
       }
@@ -330,13 +342,13 @@ async function showLanguageMenu(env, chatId) {
 
 async function showScenarioMenu(env, chatId, lang, withSavedText) {
   const baseText = withSavedText
-    ? `${t(lang, "languageSaved")}\n\n${t(lang, "chooseScenario")}`
-    : t(lang, "chooseScenario");
+    ? `${t(lang, "languageSaved")}\n\n${t(lang, "chooseScenario")}\n${scenarioTitle(lang, SCENARIO_START_FINISH)}`
+    : `${t(lang, "chooseScenario")}\n${scenarioTitle(lang, SCENARIO_START_FINISH)}`;
   if (withSavedText) {
-    await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n1`);
+    await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n/run ${lang}`);
     return;
   }
-  await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n1`);
+  await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n/run ${lang}`);
 }
 
 async function handleStart(env, chatId) {
@@ -359,7 +371,7 @@ async function handleCallbackQuery(env, callbackQuery) {
   }
 
   if (!isChatAllowed(env, chatId)) {
-    await answerCallback(env, callbackId, t(LANG_RU, "ignoredChat"));
+    await safeAnswerCallback(env, callbackId, t(LANG_RU, "ignoredChat"));
     return;
   }
 
@@ -369,20 +381,20 @@ async function handleCallbackQuery(env, callbackQuery) {
   if (data.startsWith("lang:")) {
     const selected = normalizeLang(data.split(":")[1]);
     await saveState(env, chatId, { lang: selected });
-    await answerCallback(env, callbackId, t(selected, "languageSaved"));
+    await safeAnswerCallback(env, callbackId, t(selected, "languageSaved"));
     await showScenarioMenu(env, chatId, selected, true);
     return;
   }
 
   if (data === "run_new") {
-    await answerCallback(env, callbackId, t(lang, "runStartedToast"));
+    await safeAnswerCallback(env, callbackId, t(lang, "runStartedToast"));
     await showScenarioMenu(env, chatId, lang, false);
     return;
   }
 
   if (data.startsWith("scenario:")) {
     const scenarioKey = data.split(":")[1] || SCENARIO_START_FINISH;
-    await answerCallback(env, callbackId, t(lang, "runStartedToast"));
+    await safeAnswerCallback(env, callbackId, t(lang, "runStartedToast"));
     await triggerScenarioRun(env, chatId, lang, scenarioKey);
   }
 }
@@ -502,14 +514,19 @@ async function handleTelegramWebhook(env, request) {
 
     if (/^\/run\b/i.test(text)) {
       const state = await loadState(env, chatId);
-      const lang = normalizeLang(state.lang || LANG_RU);
-      await triggerScenarioRun(env, chatId, lang, SCENARIO_START_FINISH);
+      const parts = text.split(/\s+/).filter(Boolean);
+      const requestedLang = normalizeLang(parts[1] || state.lang || LANG_RU);
+      await triggerScenarioRun(env, chatId, requestedLang, SCENARIO_START_FINISH);
       return new Response("ok");
     }
 
     const state = await loadState(env, chatId);
     const lowered = text.toLowerCase();
-    if (lowered === "ru" || lowered === "russian") {
+    if (
+      lowered === "ru" ||
+      lowered === "russian" ||
+      lowered === "\u0440\u0443\u0441\u0441\u043a\u0438\u0439"
+    ) {
       await saveState(env, chatId, { lang: LANG_RU });
       await showScenarioMenu(env, chatId, LANG_RU, true);
       return new Response("ok");
@@ -519,16 +536,11 @@ async function handleTelegramWebhook(env, request) {
       await showScenarioMenu(env, chatId, LANG_EN, true);
       return new Response("ok");
     }
-    if (lowered === "1") {
-      const lang = normalizeLang(state.lang || LANG_RU);
-      await triggerScenarioRun(env, chatId, lang, SCENARIO_START_FINISH);
-      return new Response("ok");
-    }
     if (!state.lang) {
       await showLanguageMenu(env, chatId);
       return new Response("ok");
     }
-    await showScenarioMenu(env, chatId, normalizeLang(state.lang), false);
+    await triggerScenarioRun(env, chatId, normalizeLang(state.lang), SCENARIO_START_FINISH);
   } catch (error) {
     console.error("handleTelegramWebhook failed", error);
   }
