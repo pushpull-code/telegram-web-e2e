@@ -95,7 +95,8 @@ function runStatusText(lang, status) {
 }
 
 async function telegramJson(env, method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+  const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload)
@@ -108,7 +109,8 @@ async function telegramJson(env, method, payload) {
 }
 
 async function telegramForm(env, method, formData) {
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+  const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     body: formData
   });
@@ -126,6 +128,23 @@ async function sendMessage(env, chatId, text, replyMarkup) {
     disable_web_page_preview: true,
     reply_markup: replyMarkup || undefined
   });
+}
+
+async function safeSendMessage(env, chatId, text, replyMarkup, fallbackText = text) {
+  try {
+    return await sendMessage(env, chatId, text, replyMarkup);
+  } catch (error) {
+    console.error("safeSendMessage failed", error);
+    if (!replyMarkup) {
+      throw error;
+    }
+    try {
+      return await sendMessage(env, chatId, fallbackText, undefined);
+    } catch (fallbackError) {
+      console.error("safeSendMessage fallback failed", fallbackError);
+      throw fallbackError;
+    }
+  }
 }
 
 async function answerCallback(env, callbackQueryId, text) {
@@ -289,12 +308,35 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
   return runUrl;
 }
 
+async function triggerScenarioRun(env, chatId, lang, scenarioKey) {
+  try {
+    const runUrl = await dispatchGithubRun(env, { chatId, lang, scenarioKey });
+    const messageText = [
+      t(lang, "launchStarted"),
+      `${t(lang, "launchLink")} ${runUrl}`,
+      t(lang, "launchWaitReport")
+    ].join("\n");
+    await safeSendMessage(env, chatId, messageText);
+  } catch (error) {
+    console.error("triggerScenarioRun failed", error);
+    await safeSendMessage(env, chatId, t(lang, "launchFailed"));
+  }
+}
+
+async function showLanguageMenu(env, chatId) {
+  const text = t(LANG_RU, "chooseLanguage");
+  await safeSendMessage(env, chatId, text, languageKeyboard(), `${text}\nru / en`);
+}
+
 async function showScenarioMenu(env, chatId, lang, withSavedText) {
+  const baseText = withSavedText
+    ? `${t(lang, "languageSaved")}\n\n${t(lang, "chooseScenario")}`
+    : t(lang, "chooseScenario");
   if (withSavedText) {
-    await sendMessage(env, chatId, `${t(lang, "languageSaved")}\n\n${t(lang, "chooseScenario")}`, scenarioKeyboard(lang));
+    await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n1`);
     return;
   }
-  await sendMessage(env, chatId, t(lang, "chooseScenario"), scenarioKeyboard(lang));
+  await safeSendMessage(env, chatId, baseText, scenarioKeyboard(lang), `${baseText}\n1`);
 }
 
 async function handleStart(env, chatId) {
@@ -303,7 +345,7 @@ async function handleStart(env, chatId) {
     await showScenarioMenu(env, chatId, state.lang, false);
     return;
   }
-  await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
+  await showLanguageMenu(env, chatId);
 }
 
 async function handleCallbackQuery(env, callbackQuery) {
@@ -341,18 +383,7 @@ async function handleCallbackQuery(env, callbackQuery) {
   if (data.startsWith("scenario:")) {
     const scenarioKey = data.split(":")[1] || SCENARIO_START_FINISH;
     await answerCallback(env, callbackId, t(lang, "runStartedToast"));
-    try {
-      const runUrl = await dispatchGithubRun(env, { chatId, lang, scenarioKey });
-      const messageText = [
-        t(lang, "launchStarted"),
-        `${t(lang, "launchLink")} ${runUrl}`,
-        t(lang, "launchWaitReport")
-      ].join("\n");
-      await sendMessage(env, chatId, messageText);
-    } catch (error) {
-      console.error("dispatchGithubRun error", error);
-      await sendMessage(env, chatId, t(lang, "launchFailed"));
-    }
+    await triggerScenarioRun(env, chatId, lang, scenarioKey);
   }
 }
 
@@ -465,34 +496,36 @@ async function handleTelegramWebhook(env, request) {
     }
 
     if (/^\/language\b/i.test(text)) {
-      await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
+      await showLanguageMenu(env, chatId);
       return new Response("ok");
     }
 
     if (/^\/run\b/i.test(text)) {
       const state = await loadState(env, chatId);
       const lang = normalizeLang(state.lang || LANG_RU);
-      try {
-        const runUrl = await dispatchGithubRun(env, {
-          chatId,
-          lang,
-          scenarioKey: SCENARIO_START_FINISH
-        });
-        await sendMessage(
-          env,
-          chatId,
-          [t(lang, "launchStarted"), `${t(lang, "launchLink")} ${runUrl}`, t(lang, "launchWaitReport")].join("\n")
-        );
-      } catch (error) {
-        console.error("dispatch /run failed", error);
-        await sendMessage(env, chatId, t(lang, "launchFailed"));
-      }
+      await triggerScenarioRun(env, chatId, lang, SCENARIO_START_FINISH);
       return new Response("ok");
     }
 
     const state = await loadState(env, chatId);
+    const lowered = text.toLowerCase();
+    if (lowered === "ru" || lowered === "russian") {
+      await saveState(env, chatId, { lang: LANG_RU });
+      await showScenarioMenu(env, chatId, LANG_RU, true);
+      return new Response("ok");
+    }
+    if (lowered === "en" || lowered === "english") {
+      await saveState(env, chatId, { lang: LANG_EN });
+      await showScenarioMenu(env, chatId, LANG_EN, true);
+      return new Response("ok");
+    }
+    if (lowered === "1") {
+      const lang = normalizeLang(state.lang || LANG_RU);
+      await triggerScenarioRun(env, chatId, lang, SCENARIO_START_FINISH);
+      return new Response("ok");
+    }
     if (!state.lang) {
-      await sendMessage(env, chatId, t(LANG_RU, "chooseLanguage"), languageKeyboard());
+      await showLanguageMenu(env, chatId);
       return new Response("ok");
     }
     await showScenarioMenu(env, chatId, normalizeLang(state.lang), false);
