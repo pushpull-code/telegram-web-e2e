@@ -70,6 +70,14 @@ const LANGUAGE_BUTTON_BY_LANG = {
   ru: "Русский",
   en: "English"
 } as const;
+const LANGUAGE_SELECTION_ANCHORS = [
+  "Select from available locales:",
+  "Выберите язык",
+  "Выберите локаль",
+  "Choose interface language"
+];
+const RUSSIAN_LOCALE_BUTTON_LABELS = ["Russian", "Русский"];
+const LANGUAGE_DONE_BUTTON_LABELS = ["Готово", "Done"];
 
 const START_ANCHORS = [
   'Нажми "Я готов"',
@@ -83,6 +91,7 @@ const START_ANCHORS = [
   "Hit \"I'm ready\" to start!",
   "Earn up to $7 in 10 minutes"
 ];
+const ENGLISH_START_ANCHORS = ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"];
 
 const READY_BUTTON_LABELS = ["Я готов!", "Я готов", "Участвовать", "I'm ready!", "I’m ready!"];
 const AFTER_READY_ANCHORS = [
@@ -405,6 +414,40 @@ async function hasActiveTaskCard(page: Page): Promise<boolean> {
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
+function detectStartLanguage(messages: string[]): "ru" | "en" {
+  return containsAny(messages, ENGLISH_START_ANCHORS) ? "en" : "ru";
+}
+
+async function forceRussianLocale(page: Page, onBotResponse?: (label: string) => Promise<void>): Promise<"ru" | "en"> {
+  await sendCommandAndWaitForAnchors(page, "/select_language", LANGUAGE_SELECTION_ANCHORS, 45_000);
+  await onBotResponse?.("after-select-language");
+
+  await clickAnyInlineButton(page, RUSSIAN_LOCALE_BUTTON_LABELS);
+  await page.waitForTimeout(600);
+
+  if (await hasAnyInlineButton(page, LANGUAGE_DONE_BUTTON_LABELS)) {
+    await clickAnyInlineButton(page, LANGUAGE_DONE_BUTTON_LABELS);
+    await page.waitForTimeout(600);
+  }
+
+  const restartedTail = await sendCommandAndWaitForAnchors(
+    page,
+    "/start",
+    [...LANGUAGE_PROMPT_ANCHORS, ...START_ANCHORS],
+    45_000
+  );
+  await onBotResponse?.("after-force-russian-start");
+
+  if (containsAny(restartedTail, LANGUAGE_PROMPT_ANCHORS)) {
+    await clickInlineButtonByText(page, LANGUAGE_BUTTON_BY_LANG.ru);
+    const afterLanguageChoice = await waitTailContainsAny(page, START_ANCHORS, 45_000);
+    await onBotResponse?.("after-force-russian-choice");
+    return detectStartLanguage(afterLanguageChoice);
+  }
+
+  return detectStartLanguage(restartedTail);
+}
+
 async function startWithDesiredLanguage(
   page: Page,
   onBotResponse?: (label: string) => Promise<void>
@@ -421,14 +464,18 @@ async function startWithDesiredLanguage(
     await clickInlineButtonByText(page, LANGUAGE_BUTTON_BY_LANG[desiredBotLang]);
     const afterLanguageChoice = await waitTailContainsAny(page, START_ANCHORS, 45_000);
     await onBotResponse?.(`after-language-${desiredBotLang}`);
-    return containsAny(afterLanguageChoice, ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"])
-      ? "en"
-      : "ru";
+    const selectedStartLanguage = detectStartLanguage(afterLanguageChoice);
+    if (desiredBotLang === "ru" && selectedStartLanguage === "en") {
+      return await forceRussianLocale(page, onBotResponse);
+    }
+    return selectedStartLanguage;
   }
 
-  return containsAny(startTail, ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"])
-    ? "en"
-    : "ru";
+  const startLanguage = detectStartLanguage(startTail);
+  if (desiredBotLang === "ru" && startLanguage === "en") {
+    return await forceRussianLocale(page, onBotResponse);
+  }
+  return startLanguage;
 }
 
 function nextReportStepName(index: number, label: string): string {
