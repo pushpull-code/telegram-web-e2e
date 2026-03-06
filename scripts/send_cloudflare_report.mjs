@@ -9,6 +9,7 @@ const status = (process.env.RUN_STATUS || "failure").trim();
 const durationSec = Number(process.env.RUN_DURATION_SEC || "0");
 const runUrl = (process.env.RUN_URL || "").trim();
 const screenshotsFile = (process.env.SCREENSHOTS_FILE || ".cloudflare-report-screenshots.json").trim();
+const failureFile = (process.env.FAILURE_FILE || ".cloudflare-report-failure.json").trim();
 const maxChunkBase64Chars = Number(process.env.REPORT_CALLBACK_CHUNK_BASE64_MAX || "1500000");
 const maxChunkFiles = Number(process.env.REPORT_CALLBACK_CHUNK_FILE_MAX || "4");
 
@@ -35,6 +36,21 @@ if (fs.existsSync(screenshotsFile)) {
   }
 }
 
+let failureCode = "";
+let failureMessage = "";
+if (fs.existsSync(failureFile)) {
+  try {
+    const raw = fs.readFileSync(failureFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      failureCode = String(parsed.code || "").trim();
+      failureMessage = String(parsed.message || "").trim();
+    }
+  } catch (error) {
+    console.log(`Failed to parse ${failureFile}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function reportEnvelope(extra = {}) {
   return {
     chat_id: chatId,
@@ -43,6 +59,8 @@ function reportEnvelope(extra = {}) {
     status,
     duration_sec: Number.isFinite(durationSec) && durationSec >= 0 ? Math.floor(durationSec) : 0,
     run_url: runUrl,
+    failure_code: failureCode,
+    failure_message: failureMessage,
     ...extra
   };
 }

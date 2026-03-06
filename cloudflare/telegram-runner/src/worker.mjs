@@ -15,11 +15,16 @@ const TEXT = {
     reportTitle: "\u041e\u0442\u0447\u0435\u0442 \u043f\u043e \u043f\u0440\u043e\u0433\u043e\u043d\u0443",
     reportScenario: "\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439",
     reportStatus: "\u0421\u0442\u0430\u0442\u0443\u0441",
+    reportReason: "\u041f\u0440\u0438\u0447\u0438\u043d\u0430",
     reportDuration: "\u0412\u0440\u0435\u043c\u044f",
     reportLink: "\u0421\u0441\u044b\u043b\u043a\u0430",
     reportStatusSuccess: "\u0423\u0441\u043f\u0435\u0448\u043d\u043e",
     reportStatusFailure: "\u041e\u0448\u0438\u0431\u043a\u0430",
     reportStatusCancelled: "\u041e\u0442\u043c\u0435\u043d\u0435\u043d",
+    reportReasonBotUnresponsive:
+      "\u0442\u0435\u0441\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0441\u044f \u0441 \u043e\u0448\u0438\u0431\u043a\u043e\u0439: \u0431\u043e\u0442 \u043d\u0435 \u043e\u0442\u0432\u0435\u0447\u0430\u043b \u0431\u043e\u043b\u0435\u0435 5 \u043c\u0438\u043d\u0443\u0442.",
+    reportReasonNoTask:
+      "\u0442\u0435\u0441\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0441\u044f \u0441 \u043e\u0448\u0438\u0431\u043a\u043e\u0439: \u0431\u043e\u0442 \u043d\u0435 \u0432\u044b\u0434\u0430\u043b \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443.",
     askRunAgain: "\u0425\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442?",
     runAgain: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442",
     runStartedToast: "\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u043f\u0440\u043e\u0433\u043e\u043d...",
@@ -37,11 +42,14 @@ const TEXT = {
     reportTitle: "Run report",
     reportScenario: "Scenario",
     reportStatus: "Status",
+    reportReason: "Reason",
     reportDuration: "Duration",
     reportLink: "Link",
     reportStatusSuccess: "Success",
     reportStatusFailure: "Failed",
     reportStatusCancelled: "Cancelled",
+    reportReasonBotUnresponsive: "Test failed: the bot did not answer for more than 5 minutes.",
+    reportReasonNoTask: "Test failed: the bot did not provide a new task.",
     askRunAgain: "Do you want to run a new test?",
     runAgain: "Run a new test",
     runStartedToast: "Starting run...",
@@ -92,6 +100,17 @@ function runStatusText(lang, status) {
     return t(lang, "reportStatusCancelled");
   }
   return t(lang, "reportStatusFailure");
+}
+
+function failureReasonText(lang, failureCode, failureMessage) {
+  const normalized = String(failureCode || "").trim().toLowerCase();
+  if (normalized === "bot_unresponsive") {
+    return t(lang, "reportReasonBotUnresponsive");
+  }
+  if (normalized === "no_task") {
+    return t(lang, "reportReasonNoTask");
+  }
+  return String(failureMessage || "").trim();
 }
 
 async function telegramJson(env, method, payload) {
@@ -435,11 +454,13 @@ async function handleGithubReport(env, request) {
   const duration = formatDuration(Number(payload.duration_sec || 0));
   const statusLine = runStatusText(lang, payload.status || "failure");
   const phase = String(payload.phase || "single").trim().toLowerCase();
+  const failureReason = failureReasonText(lang, payload.failure_code, payload.failure_message);
 
   const reportText = [
     t(lang, "reportTitle"),
     `${t(lang, "reportScenario")}: ${scenarioTitle(lang, scenarioKey)}`,
     `${t(lang, "reportStatus")}: ${statusLine}`,
+    failureReason ? `${t(lang, "reportReason")}: ${failureReason}` : "",
     `${t(lang, "reportDuration")}: ${duration}`,
     runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : ""
   ]

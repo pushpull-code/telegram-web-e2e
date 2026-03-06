@@ -49,6 +49,8 @@ const forceCleanStart = process.env.E2E_FORCE_CLEAN_START === "1";
 
 const TAIL_LIMIT = 160;
 const STEP_TIMEOUT_MS = 70_000;
+const BOT_IDLE_TIMEOUT_MS = 5 * 60_000;
+const POLL_INTERVAL_MS = 1_000;
 const JOIN_TASK_ERROR_RETRY_COUNT = 2;
 const JOIN_TASK_NO_TASK_RETRY_COUNT = 2;
 const JOIN_TASK_NO_TASK_RETRY_DELAY_MS = 5_000;
@@ -173,22 +175,43 @@ function findLastMessageIndex(messages: string[], fragment: string): number {
   return -1;
 }
 
+function reportableFailure(code: string, message: string): Error {
+  const error = new Error(`REPORT_REASON:${code}:${message}`);
+  error.name = "ScenarioAbortError";
+  return error;
+}
+
 async function waitTailContainsAny(page: Page, anchors: string[], timeout = STEP_TIMEOUT_MS): Promise<string[]> {
-  let matchedTail: string[] = [];
-  await expect
-    .poll(
-      async () => {
-        const tail = await collectTailMessages(page, TAIL_LIMIT);
-        if (containsAny(tail, anchors)) {
-          matchedTail = tail;
-          return true;
-        }
-        return false;
-      },
-      { timeout }
-    )
-    .toBeTruthy();
-  return matchedTail;
+  const startedAt = Date.now();
+  let lastFingerprint = (await collectTailMessages(page, TAIL_LIMIT)).join("\n@@\n");
+  let lastActivityAt = Date.now();
+  let changedSinceStart = false;
+
+  while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
+    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const fingerprint = tail.join("\n@@\n");
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastActivityAt = Date.now();
+      changedSinceStart = true;
+    }
+
+    if (containsAny(tail, anchors)) {
+      return tail;
+    }
+
+    if (!changedSinceStart && Date.now() - lastActivityAt >= BOT_IDLE_TIMEOUT_MS) {
+      throw reportableFailure("bot_unresponsive", "Bot did not answer for more than 5 minutes.");
+    }
+
+    if (changedSinceStart && Date.now() - startedAt >= timeout) {
+      break;
+    }
+
+    await page.waitForTimeout(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(`Timed out waiting for bot anchors: ${anchors.join(" | ")}`);
 }
 
 async function sendCommandAndWaitForAnchors(
@@ -200,39 +223,46 @@ async function sendCommandAndWaitForAnchors(
   const before = await collectTailMessages(page, TAIL_LIMIT);
   const beforeFingerprint = before.join("\n@@\n");
   const commandToken = command.trim();
-  let matchedAfter: string[] = [];
-
   await sendMessage(page, command);
 
-  await expect
-    .poll(
-      async () => {
-        const tail = await collectTailMessages(page, TAIL_LIMIT);
-        if (tail.join("\n@@\n") === beforeFingerprint) {
-          return false;
-        }
+  const startedAt = Date.now();
+  let lastFingerprint = beforeFingerprint;
+  let lastActivityAt = Date.now();
+  let botReplyObserved = false;
 
-        const commandIndex = findLastMessageIndex(tail, commandToken);
-        if (commandIndex < 0) {
-          return false;
-        }
+  while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
+    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const fingerprint = tail.join("\n@@\n");
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastActivityAt = Date.now();
+    }
 
+    if (fingerprint !== beforeFingerprint) {
+      const commandIndex = findLastMessageIndex(tail, commandToken);
+      if (commandIndex >= 0) {
         const afterCommand = tail.slice(commandIndex + 1);
-        if (afterCommand.length === 0) {
-          return false;
+        if (afterCommand.length > 0) {
+          botReplyObserved = true;
+          if (containsAny(afterCommand, anchors)) {
+            return afterCommand;
+          }
         }
+      }
+    }
 
-        const matched = containsAny(afterCommand, anchors);
-        if (matched) {
-          matchedAfter = afterCommand;
-        }
-        return matched;
-      },
-      { timeout }
-    )
-    .toBeTruthy();
+    if (!botReplyObserved && Date.now() - lastActivityAt >= BOT_IDLE_TIMEOUT_MS) {
+      throw reportableFailure("bot_unresponsive", "Bot did not answer for more than 5 minutes.");
+    }
 
-  return matchedAfter;
+    if (botReplyObserved && Date.now() - startedAt >= timeout) {
+      break;
+    }
+
+    await page.waitForTimeout(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(`${command}: no deterministic bot reply within timeout`);
 }
 
 async function waitForTailChangeAndAnchors(
@@ -241,42 +271,63 @@ async function waitForTailChangeAndAnchors(
   anchors: string[],
   timeout = STEP_TIMEOUT_MS
 ): Promise<string[]> {
-  let matchedTail: string[] = [];
-  await expect
-    .poll(
-      async () => {
-        const tail = await collectTailMessages(page, TAIL_LIMIT);
-        if (tail.join("\n@@\n") === beforeFingerprint) {
-          return false;
-        }
-        if (containsAny(tail, anchors)) {
-          matchedTail = tail;
-          return true;
-        }
-        return false;
-      },
-      { timeout }
-    )
-    .toBeTruthy();
-  return matchedTail;
+  const startedAt = Date.now();
+  let lastFingerprint = beforeFingerprint;
+  let lastActivityAt = Date.now();
+  let changedSinceStart = false;
+
+  while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
+    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const fingerprint = tail.join("\n@@\n");
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastActivityAt = Date.now();
+      changedSinceStart = true;
+    }
+
+    if (fingerprint !== beforeFingerprint && containsAny(tail, anchors)) {
+      return tail;
+    }
+
+    if (!changedSinceStart && Date.now() - lastActivityAt >= BOT_IDLE_TIMEOUT_MS) {
+      throw reportableFailure("bot_unresponsive", "Bot did not answer for more than 5 minutes.");
+    }
+
+    if (changedSinceStart && Date.now() - startedAt >= timeout) {
+      break;
+    }
+
+    await page.waitForTimeout(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(`Timed out waiting for bot tail change and anchors: ${anchors.join(" | ")}`);
 }
 
 async function waitForTailChange(page: Page, beforeFingerprint: string, timeout = STEP_TIMEOUT_MS): Promise<string[]> {
-  let changedTail: string[] = [];
-  await expect
-    .poll(
-      async () => {
-        const tail = await collectTailMessages(page, TAIL_LIMIT);
-        if (tail.join("\n@@\n") === beforeFingerprint) {
-          return false;
-        }
-        changedTail = tail;
-        return true;
-      },
-      { timeout }
-    )
-    .toBeTruthy();
-  return changedTail;
+  const startedAt = Date.now();
+  let lastFingerprint = beforeFingerprint;
+  let lastActivityAt = Date.now();
+
+  while (Date.now() - startedAt < Math.max(timeout, BOT_IDLE_TIMEOUT_MS)) {
+    const tail = await collectTailMessages(page, TAIL_LIMIT);
+    const fingerprint = tail.join("\n@@\n");
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastActivityAt = Date.now();
+    }
+
+    if (fingerprint !== beforeFingerprint) {
+      return tail;
+    }
+
+    if (Date.now() - lastActivityAt >= BOT_IDLE_TIMEOUT_MS) {
+      throw reportableFailure("bot_unresponsive", "Bot did not answer for more than 5 minutes.");
+    }
+
+    await page.waitForTimeout(POLL_INTERVAL_MS);
+  }
+
+  throw new Error("Timed out waiting for bot tail change.");
 }
 
 async function clickAnyInlineButton(page: Page, labels: string[]): Promise<string> {
@@ -593,8 +644,9 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }, tes
         throw new Error("Scenario stopped: /join_task returned error branch after retry.");
       }
       if (containsAny(afterJoin, NO_TASK_ANCHORS)) {
-        throw new Error(
-          "Scenario stopped: /join_task returned no-task branch after country/platform were selected."
+        throw reportableFailure(
+          "no_task",
+          "Bot did not provide a new task after country and platform were selected."
         );
       }
       await reportStep("after-join");

@@ -45,6 +45,7 @@ jobs:
       RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       SCREENSHOTS_FILE: .cloudflare-report-screenshots.json
+      FAILURE_FILE: .cloudflare-report-failure.json
 
     steps:
       - name: Mark run start timestamp
@@ -92,12 +93,19 @@ jobs:
         run: npm run test:bot
 
       - name: Run strict autorun bot test
+        id: autorun
         if: ${{ inputs.suite == 'autorun' || inputs.suite == 'all' }}
+        shell: bash
         env:
           E2E_APP_SCREENSHOT_PATH: tests/fixtures/Screenshot_1.png
           E2E_BOT_LANG: ${{ inputs.lang }}
           E2E_FORCE_CLEAN_START: "1"
-        run: xvfb-run -a npm run test:autorun:text -- --headed
+        run: |
+          set +e
+          xvfb-run -a npm run test:autorun:text -- --headed 2>&1 | tee autorun-output.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+          exit $status
 
       - name: Run freelancer tests
         if: ${{ inputs.suite == 'freelancer' || inputs.suite == 'all' }}
@@ -135,6 +143,12 @@ jobs:
           fi
           echo "seconds=$((now - started))" >> "$GITHUB_OUTPUT"
 
+      - name: Extract failure reason for Cloudflare report
+        if: always()
+        env:
+          RUN_STATUS: ${{ job.status }}
+        run: node scripts/extract_report_failure_reason.mjs autorun-output.log "${FAILURE_FILE}"
+
       - name: Collect screenshots for Cloudflare report
         if: always()
         run: node scripts/collect_report_screenshots.mjs "${SCREENSHOTS_FILE}"
@@ -152,4 +166,5 @@ jobs:
           RUN_DURATION_SEC: ${{ steps.duration.outputs.seconds }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SCREENSHOTS_FILE: ${{ env.SCREENSHOTS_FILE }}
+          FAILURE_FILE: ${{ env.FAILURE_FILE }}
         run: node scripts/send_cloudflare_report.mjs
