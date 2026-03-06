@@ -12,11 +12,6 @@ if (!BOT_TOKEN) {
   process.exit(0);
 }
 
-if (!ALLOWED_CHAT_ID) {
-  console.log("TG_ALLOWED_CHAT_ID is not set. Skip polling for safety.");
-  process.exit(0);
-}
-
 if (!REPO) {
   console.log("GITHUB_REPOSITORY is not set. Skip polling.");
   process.exit(0);
@@ -181,7 +176,7 @@ async function main() {
       return;
     }
 
-    if (chatId !== ALLOWED_CHAT_ID) {
+    if (ALLOWED_CHAT_ID && chatId !== ALLOWED_CHAT_ID) {
       console.log(`Ignore message from unauthorized chat_id=${chatId}`);
       return;
     }
