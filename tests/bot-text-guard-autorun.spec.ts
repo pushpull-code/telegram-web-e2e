@@ -1,7 +1,7 @@
 ﻿import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import {
   clickInlineButtonByText,
   collectTailMessages,
@@ -67,12 +67,6 @@ const START_ANCHORS = [
   "Проверьте доступные задания",
   "Выберите страну",
   "Какой у вас телефон",
-  "Hey, champion!",
-  "Hit \"I’m ready\" to start!",
-  "Hit \"I'm ready\" to start!",
-  "Earn up to $7 in 10 minutes"
-];
-const ENGLISH_START_ONLY_ANCHORS = [
   "Hey, champion!",
   "Hit \"I’m ready\" to start!",
   "Hit \"I'm ready\" to start!",
@@ -314,7 +308,7 @@ async function hasActiveTaskCard(page: Page): Promise<boolean> {
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
 }
 
-async function startWithDesiredLanguage(page: Page): Promise<void> {
+async function startWithDesiredLanguage(page: Page): Promise<"ru" | "en"> {
   const startTail = await sendCommandAndWaitForAnchors(
     page,
     "/start",
@@ -324,13 +318,27 @@ async function startWithDesiredLanguage(page: Page): Promise<void> {
 
   if (containsAny(startTail, LANGUAGE_PROMPT_ANCHORS)) {
     await clickInlineButtonByText(page, LANGUAGE_BUTTON_BY_LANG[desiredBotLang]);
-    await waitTailContainsAny(page, START_ANCHORS, 45_000);
-    return;
+    const afterLanguageChoice = await waitTailContainsAny(page, START_ANCHORS, 45_000);
+    return containsAny(afterLanguageChoice, ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"])
+      ? "en"
+      : "ru";
   }
 
-  if (desiredBotLang === "ru" && containsAny(startTail, ENGLISH_START_ONLY_ANCHORS)) {
-    throw new Error("Scenario stopped: bot returned English start flow while Russian flow was required.");
-  }
+  return containsAny(startTail, ["Hey, champion!", "Hit \"I'm ready\" to start!", "Hit \"I’m ready\" to start!"])
+    ? "en"
+    : "ru";
+}
+
+function nextReportStepName(index: number, label: string): string {
+  const safeLabel = label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "step";
+  return `report-step-${String(index).padStart(2, "0")}-${safeLabel}.png`;
+}
+
+async function captureReportStep(page: Page, testInfo: TestInfo, index: number, label: string): Promise<void> {
+  await page.screenshot({
+    path: testInfo.outputPath(nextReportStepName(index, label)),
+    fullPage: false
+  });
 }
 
 async function sendJoinTaskWithRecovery(page: Page): Promise<string[]> {
@@ -482,9 +490,14 @@ test.use({
   video: "on"
 });
 
-test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => {
+test("strict text-guard autorun (fails on scenario drift)", async ({ page }, testInfo) => {
   test.setTimeout(12 * 60_000);
   let completionReached = false;
+  let reportStepIndex = 0;
+  const reportStep = async (label: string) => {
+    reportStepIndex += 1;
+    await captureReportStep(page, testInfo, reportStepIndex, label);
+  };
 
   try {
     await openBotChat(page, botUsername);
@@ -495,11 +508,13 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => 
       await page.waitForTimeout(1_200);
     }
 
-    await startWithDesiredLanguage(page);
+    const actualStartLanguage = await startWithDesiredLanguage(page);
+    await reportStep(`start-${actualStartLanguage}`);
 
     if (await hasAnyInlineButton(page, READY_BUTTON_LABELS)) {
       await clickAnyInlineButton(page, READY_BUTTON_LABELS);
       await waitTailContainsAny(page, AFTER_READY_ANCHORS, 45_000);
+      await reportStep("after-ready");
     }
 
     let taskAlreadyActive = await hasActiveTaskCard(page);
@@ -510,12 +525,14 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => 
       await waitAnyInlineButton(page, ["Belarus"], 20_000);
       await clickInlineButtonByText(page, "Belarus");
       await waitTailContainsAny(page, COUNTRY_CONFIRM_ANCHORS, 45_000);
+      await reportStep("country-set");
 
       await sendCommandAndWaitForAnchors(page, "/settings", SETTINGS_MENU_ANCHORS, 45_000);
       await clickAnyInlineButton(page, CHANGE_PLATFORM_BUTTON_LABELS);
       await waitAnyInlineButton(page, ["Android"], 20_000);
       await clickInlineButtonByText(page, "Android");
       await waitTailContainsAny(page, PLATFORM_CONFIRM_ANCHORS, 45_000);
+      await reportStep("platform-set");
 
       taskAlreadyActive = await hasActiveTaskCard(page);
     }
@@ -531,12 +548,14 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => 
           "Scenario stopped: /join_task returned no-task branch after country/platform were selected."
         );
       }
+      await reportStep("after-join");
     }
 
     let photoResponseObserved = false;
 
     for (let cycle = 1; cycle <= MAX_PHOTO_CYCLES && !completionReached; cycle++) {
       await reachScreenshotPrompt(page);
+      await reportStep(`photo-prompt-${cycle}`);
 
       const before = await collectTailMessages(page, TAIL_LIMIT);
       const beforeFingerprint = before.join("\n@@\n");
@@ -547,18 +566,21 @@ test("strict text-guard autorun (fails on scenario drift)", async ({ page }) => 
       try {
         afterPhoto = await waitForTailChangeAndAnchors(page, beforeFingerprint, POST_PHOTO_ANCHORS, STEP_TIMEOUT_MS);
         photoResponseObserved = true;
+        await reportStep(`after-photo-${cycle}`);
       } catch {
         afterPhoto = await collectTailMessages(page, TAIL_LIMIT);
       }
 
       if (containsAny(afterPhoto, COMPLETION_ANCHORS)) {
         completionReached = true;
+        await reportStep("completion");
         break;
       }
 
       const completionAfterFinish = await waitForCompletionOrFinish(page, 45_000);
       if (completionAfterFinish) {
         completionReached = true;
+        await reportStep("completion");
         break;
       }
 

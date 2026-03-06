@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 
 const OUTPUT_PATH = process.argv[2] || ".cloudflare-report-screenshots.json";
 const ROOTS = ["test-results", "playwright-report"];
-const MAX_FILES = 3;
+const MAX_FILES = Number(process.env.REPORT_SCREENSHOT_MAX || "8");
 const MAX_FILE_BYTES = 1_500_000;
 const MAX_TOTAL_BASE64_CHARS = 4_000_000;
 
@@ -45,18 +45,31 @@ function mimeByFile(filePath) {
   return "image/png";
 }
 
+function isReportStep(filePath) {
+  return path.basename(filePath).toLowerCase().startsWith("report-step-");
+}
+
 function gatherCandidates() {
   const files = [];
   for (const root of ROOTS) {
     walkFiles(root, files);
   }
-  return files
+  const screenshotFiles = files
     .filter(isScreenshot)
     .map((filePath) => {
       const stat = fs.statSync(filePath);
-      return { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      return { filePath, mtimeMs: stat.mtimeMs, size: stat.size, reportStep: isReportStep(filePath) };
+    });
+
+  const reportSteps = screenshotFiles
+    .filter((item) => item.reportStep)
+    .sort((a, b) => path.basename(a.filePath).localeCompare(path.basename(b.filePath)));
+
+  if (reportSteps.length > 0) {
+    return reportSteps;
+  }
+
+  return screenshotFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
 function collectScreenshots() {

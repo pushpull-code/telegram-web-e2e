@@ -447,7 +447,7 @@ async function handleGithubReport(env, request) {
 
   await sendMessage(env, chatId, reportText);
 
-  const screenshots = Array.isArray(payload.screenshots) ? payload.screenshots.slice(0, 3) : [];
+  const screenshots = Array.isArray(payload.screenshots) ? payload.screenshots : [];
   for (let i = 0; i < screenshots.length; i += 1) {
     const item = screenshots[i];
     const b64 = String(item?.data_base64 || "");
