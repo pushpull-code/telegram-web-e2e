@@ -25,6 +25,7 @@ const TEXT = {
       "\u0442\u0435\u0441\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0441\u044f \u0441 \u043e\u0448\u0438\u0431\u043a\u043e\u0439: \u0431\u043e\u0442 \u043d\u0435 \u043e\u0442\u0432\u0435\u0447\u0430\u043b \u0431\u043e\u043b\u0435\u0435 5 \u043c\u0438\u043d\u0443\u0442.",
     reportReasonNoTask:
       "\u0442\u0435\u0441\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0441\u044f \u0441 \u043e\u0448\u0438\u0431\u043a\u043e\u0439: \u0431\u043e\u0442 \u043d\u0435 \u0432\u044b\u0434\u0430\u043b \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443.",
+    runTestButton: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0442\u0435\u0441\u0442",
     askRunAgain: "\u0425\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442?",
     runAgain: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0442\u0435\u0441\u0442",
     runStartedToast: "\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u043f\u0440\u043e\u0433\u043e\u043d...",
@@ -50,6 +51,7 @@ const TEXT = {
     reportStatusCancelled: "Cancelled",
     reportReasonBotUnresponsive: "Test failed: the bot did not answer for more than 5 minutes.",
     reportReasonNoTask: "Test failed: the bot did not provide a new task.",
+    runTestButton: "Run test",
     askRunAgain: "Do you want to run a new test?",
     runAgain: "Run a new test",
     runStartedToast: "Starting run...",
@@ -201,18 +203,16 @@ function languageKeyboard() {
 }
 
 function scenarioKeyboard(lang) {
-  const command = lang === LANG_EN ? "/run en" : "/run ru";
   return {
-    keyboard: [[{ text: command }]],
+    keyboard: [[{ text: t(lang, "runTestButton") }]],
     resize_keyboard: true,
     one_time_keyboard: true
   };
 }
 
 function rerunKeyboard(lang) {
-  const command = lang === LANG_EN ? "/run en" : "/run ru";
   return {
-    keyboard: [[{ text: command }]],
+    keyboard: [[{ text: t(lang, "runTestButton") }]],
     resize_keyboard: true,
     one_time_keyboard: true
   };
@@ -573,6 +573,10 @@ async function handleTelegramWebhook(env, request) {
     }
     if (!state.lang) {
       await showLanguageMenu(env, chatId);
+      return new Response("ok");
+    }
+    if (lowered === t(LANG_RU, "runTestButton").toLowerCase() || lowered === t(LANG_EN, "runTestButton").toLowerCase()) {
+      await triggerScenarioRun(env, chatId, normalizeLang(state.lang), SCENARIO_START_FINISH);
       return new Response("ok");
     }
     await triggerScenarioRun(env, chatId, normalizeLang(state.lang), SCENARIO_START_FINISH);
