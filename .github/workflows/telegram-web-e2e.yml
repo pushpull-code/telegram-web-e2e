@@ -15,6 +15,10 @@ on:
         description: 'Report language (ru | en)'
         required: false
         default: 'ru'
+      bot_lang:
+        description: 'Bot interface language for autorun (ru | en)'
+        required: false
+        default: 'ru'
       scenario_key:
         description: 'Scenario key for report'
         required: false
@@ -98,7 +102,7 @@ jobs:
         shell: bash
         env:
           E2E_APP_SCREENSHOT_PATH: tests/fixtures/Screenshot_1.png
-          E2E_BOT_LANG: ${{ inputs.lang }}
+          E2E_BOT_LANG: ${{ inputs.bot_lang }}
           E2E_FORCE_CLEAN_START: "1"
         run: |
           set +e

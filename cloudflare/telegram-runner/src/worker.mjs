@@ -278,6 +278,7 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
       suite,
       chat_id: String(chatId),
       lang: String(lang),
+      bot_lang: LANG_RU,
       scenario_key: String(scenarioKey),
       report_callback_url: reportCallbackUrl
     }

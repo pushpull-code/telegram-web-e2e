@@ -107,7 +107,16 @@ const READY_TO_JOIN_ANCHORS = [
   "Please check available tasks by clicking on /join_task"
 ];
 
-const SETTINGS_MENU_ANCHORS = ["Изменить страну", "Сменить платформу", "Настройки профиля", "Страна:"];
+const SETTINGS_MENU_ANCHORS = [
+  "Изменить страну",
+  "Сменить платформу",
+  "Настройки профиля",
+  "Страна:",
+  "Change country",
+  "Change platform",
+  "Settings",
+  "Country:"
+];
 const CHANGE_COUNTRY_BUTTON_LABELS = ["Изменить страну", "Change country"];
 const CHANGE_PLATFORM_BUTTON_LABELS = ["Сменить платформу", "Change platform"];
 
