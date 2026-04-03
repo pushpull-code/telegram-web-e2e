@@ -139,6 +139,7 @@ const NO_TASK_ANCHORS = [
 ];
 
 const SUBMIT_BUTTON_LABELS = ["Завершить задачу", "Finish task"];
+const SUBMIT_BUTTON_FALLBACK_RE = /(завершить\s*задачу|finish\s*task|complete\s*task)/i;
 const ACTIVE_TASK_ANCHORS = [
   "Вы зарегистрировались для выполнения задания",
   "You have been registered for the task",
@@ -156,6 +157,7 @@ const ACTIVE_TASK_BUTTON_LABELS = [
   ...SUBMIT_BUTTON_LABELS
 ];
 const REVIEW_PROMPT_ANCHORS = ["Вы оставили отзыв?", "Вы оценили приложение?", "Did you leave a review?"];
+const INSTALL_PROMPT_ANCHORS = ["Вы установили приложение?", "Did you install the app?"];
 const YES_BUTTON_LABELS = ["Да", "Yes"];
 const NEXT_BUTTON_LABELS = ["Дальше", "Next"];
 
@@ -165,7 +167,14 @@ const SCREENSHOT_PROMPT_ANCHORS = [
 ];
 const INVALID_SCREENSHOT_ANCHORS = ["Некорректное значение"];
 const REVIEW_NOT_VISIBLE_ANCHORS = ["Твой отзыв на приложение", "пока не отображается в Google Play"];
-const FINISH_BUTTON_LABELS = ["✅ Finish", "Finish", "Готово", "Завершить"];
+const FINISH_BUTTON_LABELS = [
+  "✅ Finish",
+  "Finish",
+  "Готово",
+  "Завершить задачу",
+  "Complete task",
+  "Завершить"
+];
 const COMPLETION_ANCHORS = [
   "Поздравляем, вы успешно выполнили задание",
   "Как только наша система автоматически подтвердит"
@@ -418,6 +427,68 @@ async function hasAnyInlineButton(page: Page, labels: string[]): Promise<boolean
   return false;
 }
 
+async function hasInlineButtonByRegex(page: Page, pattern: RegExp): Promise<boolean> {
+  const textButton = page
+    .locator(
+      "span.inline-button-text, span.reply-markup-button-text, .inline-button-text, .reply-markup-button-text"
+    )
+    .filter({ hasText: pattern })
+    .last();
+  if (await textButton.isVisible().catch(() => false)) {
+    return true;
+  }
+
+  const roleButton = page.getByRole("button", { name: pattern }).last();
+  if (await roleButton.isVisible().catch(() => false)) {
+    return true;
+  }
+
+  const genericButton = page
+    .locator(
+      "button, [role='button'], .btn, .reply-markup-button, .inline-button, .reply-markup-button-text, .inline-button-text"
+    )
+    .filter({ hasText: pattern })
+    .last();
+  return await genericButton.isVisible().catch(() => false);
+}
+
+async function clickInlineButtonByRegex(page: Page, pattern: RegExp): Promise<boolean> {
+  const candidates = [
+    page
+      .locator(
+        "span.inline-button-text, span.reply-markup-button-text, .inline-button-text, .reply-markup-button-text"
+      )
+      .filter({ hasText: pattern })
+      .last(),
+    page.getByRole("button", { name: pattern }).last(),
+    page
+      .locator(
+        "button, [role='button'], .btn, .reply-markup-button, .inline-button, .reply-markup-button-text, .inline-button-text"
+      )
+      .filter({ hasText: pattern })
+      .last()
+  ];
+
+  for (const candidate of candidates) {
+    if (!(await candidate.isVisible().catch(() => false))) {
+      continue;
+    }
+    try {
+      await candidate.click({ timeout: 1_500 });
+      return true;
+    } catch {
+      try {
+        await candidate.click({ timeout: 1_000, force: true });
+        return true;
+      } catch {
+        // try next strategy
+      }
+    }
+  }
+
+  return false;
+}
+
 async function hasActiveTaskCard(page: Page): Promise<boolean> {
   const tail = await collectCurrentSessionTail(page, TAIL_LIMIT);
   return containsAny(tail, ACTIVE_TASK_ANCHORS);
@@ -557,17 +628,32 @@ async function reachScreenshotPrompt(
       return;
     }
 
-    const canClickSubmit = await hasAnyInlineButton(page, SUBMIT_BUTTON_LABELS);
+    const canClickSubmit =
+      (await hasAnyInlineButton(page, SUBMIT_BUTTON_LABELS)) ||
+      (await hasInlineButtonByRegex(page, SUBMIT_BUTTON_FALLBACK_RE));
     const canClickYes = await hasAnyInlineButton(page, YES_BUTTON_LABELS);
     const hasReviewNotVisibleText = containsAny(tail, REVIEW_NOT_VISIBLE_ANCHORS);
     const hasReviewPromptText = containsAny(tail, REVIEW_PROMPT_ANCHORS);
+    const hasInstallPromptText = containsAny(tail, INSTALL_PROMPT_ANCHORS);
 
     if (
       canClickSubmit &&
-      (hasReviewNotVisibleText || !canClickYes) &&
+      (hasReviewNotVisibleText || !canClickYes || (!hasReviewPromptText && !hasInstallPromptText)) &&
       !(lastAction === "submit" && lastActionFingerprint === fingerprint)
     ) {
-      await clickAnyInlineButton(page, SUBMIT_BUTTON_LABELS);
+      let submitClicked = false;
+      try {
+        await clickAnyInlineButton(page, SUBMIT_BUTTON_LABELS);
+        submitClicked = true;
+      } catch {
+        submitClicked = await clickInlineButtonByRegex(page, SUBMIT_BUTTON_FALLBACK_RE);
+      }
+      if (!submitClicked) {
+        lastAction = null;
+        lastActionFingerprint = fingerprint;
+        await page.waitForTimeout(500);
+        continue;
+      }
       await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
       await onBotResponse?.("after-submit-click");
       lastAction = "submit";
@@ -578,10 +664,17 @@ async function reachScreenshotPrompt(
 
     if (
       canClickYes &&
-      (hasReviewPromptText || !canClickSubmit) &&
+      (hasReviewPromptText || hasInstallPromptText || !canClickSubmit) &&
       !(lastAction === "yes" && lastActionFingerprint === fingerprint)
     ) {
-      await clickAnyInlineButton(page, YES_BUTTON_LABELS);
+      try {
+        await clickAnyInlineButton(page, YES_BUTTON_LABELS);
+      } catch {
+        lastAction = null;
+        lastActionFingerprint = fingerprint;
+        await page.waitForTimeout(500);
+        continue;
+      }
       await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
       await onBotResponse?.("after-yes-click");
       lastAction = "yes";
@@ -607,7 +700,14 @@ async function reachScreenshotPrompt(
       await hasAnyInlineButton(page, NEXT_BUTTON_LABELS) &&
       !(lastAction === "next" && lastActionFingerprint === fingerprint)
     ) {
-      await clickAnyInlineButton(page, NEXT_BUTTON_LABELS);
+      try {
+        await clickAnyInlineButton(page, NEXT_BUTTON_LABELS);
+      } catch {
+        lastAction = null;
+        lastActionFingerprint = fingerprint;
+        await page.waitForTimeout(500);
+        continue;
+      }
       await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
       await onBotResponse?.("after-next-click");
       lastAction = "next";
@@ -639,9 +739,21 @@ async function waitForCompletionOrFinish(
     }
 
     const fingerprint = tail.slice(-10).join("\n@@\n");
-    const finishVisible = await hasAnyInlineButton(page, FINISH_BUTTON_LABELS);
+    const finishVisible =
+      (await hasAnyInlineButton(page, FINISH_BUTTON_LABELS)) ||
+      (await hasInlineButtonByRegex(page, SUBMIT_BUTTON_FALLBACK_RE));
     if (finishVisible && lastFinishFingerprint !== fingerprint) {
-      await clickAnyInlineButton(page, FINISH_BUTTON_LABELS);
+      let finishClicked = false;
+      try {
+        await clickAnyInlineButton(page, FINISH_BUTTON_LABELS);
+        finishClicked = true;
+      } catch {
+        finishClicked = await clickInlineButtonByRegex(page, SUBMIT_BUTTON_FALLBACK_RE);
+      }
+      if (!finishClicked) {
+        await page.waitForTimeout(600);
+        continue;
+      }
       await waitForTailChange(page, fingerprint, 20_000).catch(() => null);
       await onBotResponse?.("after-finish-click");
       lastFinishFingerprint = fingerprint;
