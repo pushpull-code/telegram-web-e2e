@@ -774,10 +774,24 @@ export async function sendFileAttachment(
 
   if (!sentAutomatically) {
     const modalSendButton = await waitForAttachmentSendButton(page, 8_000);
-    if (!modalSendButton) {
-      throw new Error(`Attachment preview did not open (mode=${mode}).`);
+    if (modalSendButton) {
+      await modalSendButton.click();
+      return;
     }
-    await modalSendButton.click();
+
+    if (await markAutoSendIfDetected("final no-preview check", 5_000)) {
+      return;
+    }
+
+    if (await trySubmitByEnter("final no-preview enter fallback", 5_000)) {
+      return;
+    }
+
+    if (await trySubmitViaKnownSendControls("final no-preview send-controls fallback", 5_000)) {
+      return;
+    }
+
+    throw new Error(`Attachment preview did not open (mode=${mode}).`);
   }
 }
 export async function clickInlineButtonByText(page: Page, text: string): Promise<void> {
