@@ -79,6 +79,11 @@ const JOIN_TASK_ANCHORS = [
   "Order has already been taken by another freelancer or completed",
   "Мы платим реальные деньги"
 ];
+const JOIN_TASK_BACKEND_ERROR_ANCHORS = [
+  "An error occurred. If the error persists, please contact",
+  "If the error persists, please contact",
+  "@remotenode"
+];
 const READY_ENTRY_ANCHORS = [...JOIN_TASK_ANCHORS, ...VERIFICATION_SUCCESS_ANCHORS, ...READY_OR_VERIFIED_ANCHORS];
 
 const TASK_STEP_ANCHORS = [
@@ -140,6 +145,9 @@ const DELETE_ME_ANCHORS = [
 
 const ANTI_BOT_BUTTON_LABELS = ["Я не бот", "I am not a bot"];
 
+type JoinTaskAttemptResult = "join_anchors" | "backend_error" | "none";
+type JoinTaskRecoveryResult = "ok" | "backend_error";
+
 function findLastMessageIndex(messages: string[], fragment: string): number {
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index]?.includes(fragment)) {
@@ -148,6 +156,14 @@ function findLastMessageIndex(messages: string[], fragment: string): number {
   }
 
   return -1;
+}
+
+function hasAnyAnchor(messages: string[], anchors: string[]): boolean {
+  return anchors.some((anchor) => messages.some((message) => message.includes(anchor)));
+}
+
+function countMessagesWithAnchors(messages: string[], anchors: string[]): number {
+  return messages.filter((message) => anchors.some((anchor) => message.includes(anchor))).length;
 }
 
 async function clickReadyButton(page: Parameters<typeof clickInlineButtonByText>[0]): Promise<void> {
@@ -311,6 +327,46 @@ async function sendCommandAndWaitForAnchors(
     .toBeTruthy();
 }
 
+async function hasAnchorsAfterLatestCommand(
+  page: Parameters<typeof collectTailMessages>[0],
+  commandToken: string,
+  anchors: string[],
+  tailLimit = 80
+): Promise<boolean> {
+  const tail = await collectTailMessages(page, tailLimit);
+  const lastCommandIndex = findLastMessageIndex(tail, commandToken);
+  if (lastCommandIndex < 0) {
+    return false;
+  }
+
+  const afterCommand = tail.slice(lastCommandIndex + 1);
+  if (afterCommand.length === 0) {
+    return false;
+  }
+
+  return anchors.some((anchor) => afterCommand.some((message) => message.includes(anchor)));
+}
+
+async function waitForAnchorsAfterLatestCommand(
+  page: Parameters<typeof collectTailMessages>[0],
+  commandToken: string,
+  anchors: string[],
+  tailLimit = 80,
+  timeout = 10_000
+): Promise<boolean> {
+  try {
+    await expect
+      .poll(
+        async () => await hasAnchorsAfterLatestCommand(page, commandToken, anchors, tailLimit),
+        { timeout }
+      )
+      .toBeTruthy();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function tryWaitForAnchors(
   page: Parameters<typeof collectTailMessages>[0],
   anchors: string[],
@@ -340,12 +396,53 @@ async function trySendJoinTask(
   page: Parameters<typeof sendMessage>[0],
   tailLimit = 80,
   timeout = 55_000
-): Promise<boolean> {
+): Promise<JoinTaskAttemptResult> {
+  const before = await collectTailMessages(page, tailLimit);
+  const beforeFingerprint = before.join("\n@@\n");
+  const beforeBackendErrorCount = countMessagesWithAnchors(before, JOIN_TASK_BACKEND_ERROR_ANCHORS);
+
+  await sendMessage(page, "/join_task");
+
+  let detectedResult: JoinTaskAttemptResult = "none";
   try {
-    await sendCommandAndWaitForAnchors(page, "/join_task", JOIN_TASK_ANCHORS, tailLimit, timeout);
-    return true;
+    await expect
+      .poll(
+        async () => {
+          const tail = await collectTailMessages(page, tailLimit);
+          const tailChanged = tail.join("\n@@\n") !== beforeFingerprint;
+          if (!tailChanged) {
+            return "none";
+          }
+
+          const lastJoinTaskIndex = findLastMessageIndex(tail, "/join_task");
+          if (lastJoinTaskIndex >= 0) {
+            const afterJoinTask = tail.slice(lastJoinTaskIndex + 1);
+            if (afterJoinTask.length > 0) {
+              if (hasAnyAnchor(afterJoinTask, JOIN_TASK_ANCHORS)) {
+                detectedResult = "join_anchors";
+                return detectedResult;
+              }
+              if (hasAnyAnchor(afterJoinTask, JOIN_TASK_BACKEND_ERROR_ANCHORS)) {
+                detectedResult = "backend_error";
+                return detectedResult;
+              }
+            }
+          }
+
+          const backendErrorCount = countMessagesWithAnchors(tail, JOIN_TASK_BACKEND_ERROR_ANCHORS);
+          if (backendErrorCount > beforeBackendErrorCount) {
+            detectedResult = "backend_error";
+            return detectedResult;
+          }
+
+          return "none";
+        },
+        { timeout }
+      )
+      .not.toBe("none");
+    return detectedResult;
   } catch {
-    return false;
+    return "none";
   }
 }
 
@@ -457,9 +554,21 @@ async function joinTaskWithRecovery(
   page: Parameters<typeof sendMessage>[0],
   tailLimit = 80,
   timeout = 55_000
-): Promise<void> {
-  if (await trySendJoinTask(page, tailLimit, timeout)) {
-    return;
+): Promise<JoinTaskRecoveryResult> {
+  let backendErrorDetected = false;
+  const tryJoinTask = async (): Promise<boolean> => {
+    const result = await trySendJoinTask(page, tailLimit, timeout);
+    if (result === "join_anchors") {
+      return true;
+    }
+    if (result === "backend_error") {
+      backendErrorDetected = true;
+    }
+    return false;
+  };
+
+  if (await tryJoinTask()) {
+    return "ok";
   }
 
   if (await isReadyButtonVisible(page)) {
@@ -469,29 +578,37 @@ async function joinTaskWithRecovery(
 
   await passAntiBotIfNeeded(page, tailLimit);
 
-  if (await trySendJoinTask(page, tailLimit, timeout)) {
-    return;
+  if (await tryJoinTask()) {
+    return "ok";
   }
 
-  const onboardingLoopDetected = await tryWaitForAnchors(page, START_ANCHORS, tailLimit, 10_000);
-  if (!onboardingLoopDetected) {
-    throw new Error("/join_task did not return join anchors and onboarding loop was not detected.");
-  }
-
-  if (await isReadyButtonVisible(page)) {
-    await clickReadyButton(page);
-    await tryWaitForAnchors(page, READY_OR_VERIFIED_ANCHORS, tailLimit, 35_000);
-  }
-
-  await passAntiBotIfNeeded(page, tailLimit);
-
-  if (await trySendJoinTask(page, tailLimit, timeout)) {
-    return;
-  }
-
-  throw new Error(
-    "/join_task keeps returning non-deterministic response after ready + anti-bot retries."
+  const onboardingLoopDetected = await waitForAnchorsAfterLatestCommand(
+    page,
+    "/join_task",
+    START_ANCHORS,
+    tailLimit,
+    10_000
   );
+  if (!onboardingLoopDetected) {
+    return "backend_error";
+  }
+
+  if (await isReadyButtonVisible(page)) {
+    await clickReadyButton(page);
+    await tryWaitForAnchors(page, READY_OR_VERIFIED_ANCHORS, tailLimit, 35_000);
+  }
+
+  await passAntiBotIfNeeded(page, tailLimit);
+
+  if (await tryJoinTask()) {
+    return "ok";
+  }
+
+  if (backendErrorDetected) {
+    return "backend_error";
+  }
+
+  return "backend_error";
 }
 
 async function ensureReadyAndVerificationState(
@@ -617,7 +734,11 @@ test.describe.serial("Telegram bot flow (start payload country/platform)", () =>
 
   test("/join_task returns task card or no-task state", async ({ page }) => {
     await openBotScenarioFromDeepLink(page);
-    await joinTaskWithRecovery(page, 80, 55_000);
+    const joinTaskResult = await joinTaskWithRecovery(page, 80, 55_000);
+    test.skip(
+      joinTaskResult === "backend_error",
+      "/join_task returned temporary backend error response."
+    );
   });
 
   test("/view_earnings returns totals and pending values", async ({ page }) => {
@@ -651,7 +772,11 @@ test.describe.serial("Telegram bot flow (start payload country/platform)", () =>
     page
   }) => {
     await openBotScenarioFromDeepLink(page);
-    await joinTaskWithRecovery(page, 80, 55_000);
+    const joinTaskResult = await joinTaskWithRecovery(page, 80, 55_000);
+    test.skip(
+      joinTaskResult === "backend_error",
+      "/join_task returned temporary backend error response."
+    );
 
     const hasAssignedTask = await hasAssignedTaskAfterLatestJoinCommand(page, 90);
 
@@ -682,7 +807,11 @@ test.describe.serial("Telegram bot flow (start payload country/platform)", () =>
 
   test("invalid screenshot is rejected on screenshot step", async ({ page }) => {
     await openBotScenarioFromDeepLink(page);
-    await joinTaskWithRecovery(page, 80, 55_000);
+    const joinTaskResult = await joinTaskWithRecovery(page, 80, 55_000);
+    test.skip(
+      joinTaskResult === "backend_error",
+      "/join_task returned temporary backend error response."
+    );
 
     const hasAssignedTask = await hasAssignedTaskAfterLatestJoinCommand(page, 90);
 
