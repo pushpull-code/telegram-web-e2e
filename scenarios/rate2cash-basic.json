@@ -1,0 +1,49 @@
+{
+  "name": "rate2cash-basic-smoke",
+  "bot": "${BOT_USERNAME:-artp345_bot}",
+  "continueOnFailure": true,
+  "tailLimit": 120,
+  "steps": [
+    {
+      "name": "open start payload",
+      "openStartPayload": "${BOT_START_PAYLOAD:-adexium_us_1}",
+      "expectComposer": true,
+      "expectTextAny": [
+        "Нажми \"Я готов\"",
+        "Нажми \"Я готов!\"",
+        "Hit “I’m ready”",
+        "I’m ready",
+        "Выберите страну",
+        "Проверьте доступные задания",
+        "Страна вашего аккаунта"
+      ],
+      "timeoutMs": 45000,
+      "requireFreshResponse": false
+    },
+    {
+      "name": "join task",
+      "send": "/join_task",
+      "expectTextAny": [
+        "Вы зарегистрировались для выполнения задания",
+        "К сожалению, в данный момент нет доступных задач",
+        "Сейчас нет доступных заданий",
+        "There are no available tasks",
+        "You have been registered for the task",
+        "Next step to complete the task",
+        "Order has already been taken"
+      ],
+      "timeoutMs": 60000
+    },
+    {
+      "name": "earnings",
+      "send": "/view_earnings",
+      "expectTextAny": [
+        "Общий заработок",
+        "Ожидающие одобрения",
+        "Total earnings",
+        "Pending approval"
+      ],
+      "timeoutMs": 60000
+    }
+  ]
+}

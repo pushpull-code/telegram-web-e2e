@@ -960,6 +960,61 @@ export async function hasInlineButton(page: Page, text: string): Promise<boolean
   );
 }
 
+export async function collectVisibleInlineButtons(page: Page, limit = 50): Promise<string[]> {
+  await scrollChatToBottom(page);
+
+  return await page.evaluate(
+    ({ selectors, max }) => {
+      const normalizeText = (value: string) =>
+        value
+          .replace(/\u00a0/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      const isVisible = (el: Element) => {
+        const style = window.getComputedStyle(el as HTMLElement);
+        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+          return false;
+        }
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        const intersectsViewport =
+          rect.bottom > 0 &&
+          rect.right > 0 &&
+          rect.top < window.innerHeight &&
+          rect.left < window.innerWidth;
+        return rect.width > 0 && rect.height > 0 && intersectsViewport;
+      };
+
+      const seen = new Set<string>();
+      const labels: string[] = [];
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+      for (const node of nodes) {
+        const actionTarget =
+          node.closest("button, [role='button'], .btn, .reply-markup-button, .inline-button") || node;
+        if (!isVisible(actionTarget)) {
+          continue;
+        }
+
+        const text = normalizeText(node.innerText || node.textContent || "");
+        if (!text || text.length > 120 || seen.has(text)) {
+          continue;
+        }
+
+        seen.add(text);
+        labels.push(text);
+        if (labels.length >= max) {
+          break;
+        }
+      }
+
+      return labels;
+    },
+    {
+      selectors: TELEGRAM_BUTTON_SELECTORS,
+      max: limit
+    }
+  );
+}
+
 async function clickMiniAppHumanButtonInTarget(target: Page | Frame): Promise<boolean> {
   const roleButton = target.getByRole("button", { name: MINI_APP_HUMAN_BUTTON_RE }).first();
   if (await roleButton.isVisible().catch(() => false)) {

@@ -23,13 +23,17 @@ export default defineConfig({
       testMatch: /.*\.setup\.ts/
     },
     {
+      name: "mtproto",
+      testMatch: /.*mtproto-(smoke|discovery)\.spec\.ts/
+    },
+    {
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
         storageState: authFile
       },
       dependencies: ["setup"],
-      testIgnore: /.*\.setup\.ts/
+      testIgnore: [/.*\.setup\.ts/, /.*mtproto-(smoke|discovery)\.spec\.ts/]
     }
   ]
 });

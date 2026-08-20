@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Test suite to run (bot | autorun | freelancer | settings | all)'
+        description: 'Test suite to run (bot | mtproto | discover_mtproto | scenario | discover | autorun | freelancer | settings | all)'
         required: false
         default: 'bot'
+      scenario_file:
+        description: 'Scenario JSON file for scenario suite'
+        required: false
+        default: 'scenarios/rate2cash-basic.json'
       chat_id:
         description: 'Telegram chat id for Cloudflare report callback (optional)'
         required: false
@@ -47,7 +51,12 @@ jobs:
       RUN_CHAT_ID: ${{ inputs.chat_id }}
       RUN_LANG: ${{ inputs.lang }}
       RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
+      SCENARIO_FILE: ${{ inputs.scenario_file }}
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
+      MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
+      MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
       SCREENSHOTS_FILE: .cloudflare-report-screenshots.json
       FAILURE_FILE: .cloudflare-report-failure.json
 
@@ -95,6 +104,22 @@ jobs:
       - name: Run bot tests
         if: ${{ !inputs.suite || inputs.suite == 'bot' || inputs.suite == 'all' }}
         run: npm run test:bot
+
+      - name: Run MTProto smoke tests
+        if: ${{ inputs.suite == 'mtproto' || inputs.suite == 'all' }}
+        run: npm run test:mtproto
+
+      - name: Run MTProto discovery with branch analysis
+        if: ${{ inputs.suite == 'discover_mtproto' || inputs.suite == 'all' }}
+        run: npm run test:discover:mtproto
+
+      - name: Run scenario tests
+        if: ${{ inputs.suite == 'scenario' || inputs.suite == 'all' }}
+        run: npm run test:scenario
+
+      - name: Run discovery tests
+        if: ${{ inputs.suite == 'discover' || inputs.suite == 'all' }}
+        run: npm run test:discover
 
       - name: Run strict autorun bot test
         id: autorun

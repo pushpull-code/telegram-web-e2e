@@ -1,4 +1,14 @@
-const REQUIRED_SUITES = new Set(["bot", "autorun", "freelancer", "settings", "all"]);
+const REQUIRED_SUITES = new Set([
+  "bot",
+  "mtproto",
+  "discover_mtproto",
+  "scenario",
+  "discover",
+  "autorun",
+  "freelancer",
+  "settings",
+  "all"
+]);
 
 const BOT_TOKEN = (process.env.TG_BOT_TOKEN || "").trim();
 const ALLOWED_CHAT_ID = (process.env.TG_ALLOWED_CHAT_ID || "").trim();
