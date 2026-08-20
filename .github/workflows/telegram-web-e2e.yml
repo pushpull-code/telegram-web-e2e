@@ -89,6 +89,7 @@ jobs:
           sudo apt-get install -y xclip
 
       - name: Restore Telegram auth storage state
+        if: ${{ inputs.suite != 'mtproto' && inputs.suite != 'discover_mtproto' }}
         shell: bash
         run: |
           if [ -z "${TELEGRAM_STORAGE_STATE_B64:-}" ]; then
