@@ -122,6 +122,7 @@ Discovery controls:
 - `MTPROTO_DISCOVERY_MAX_DEPTH` default `2`
 - `MTPROTO_DISCOVERY_MAX_NODES` default `14`
 - `MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE` default `8`
+- `MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS` default `3500`
 - `MTPROTO_DISCOVERY_DENY_BUTTON_RE` for buttons that must not be clicked
 
 Artifacts:

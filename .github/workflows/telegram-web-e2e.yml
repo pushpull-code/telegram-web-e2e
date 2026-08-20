@@ -55,6 +55,9 @@ jobs:
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
+      MTPROTO_DISCOVERY_MAX_DEPTH: ${{ vars.MTPROTO_DISCOVERY_MAX_DEPTH || '1' }}
+      MTPROTO_DISCOVERY_MAX_NODES: ${{ vars.MTPROTO_DISCOVERY_MAX_NODES || '8' }}
+      MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS: ${{ vars.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS || '3500' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
       SCREENSHOTS_FILE: .cloudflare-report-screenshots.json

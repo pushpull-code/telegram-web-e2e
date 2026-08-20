@@ -96,6 +96,7 @@ export async function clickMtprotoButton(
     columnIndex?: number;
     buttonDataBase64?: string;
     allowTimeoutAsSuccess?: boolean;
+    clickTimeoutMs?: number;
   }
 ): Promise<unknown> {
   return mtprotoRequest("/api/click-button", { ...peer, messageId, ...selector });

@@ -27,6 +27,7 @@ const maxNodes = Number(process.env.MTPROTO_DISCOVERY_MAX_NODES || "14");
 const maxButtonsPerNode = Number(process.env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE || "8");
 const stateLimit = Number(process.env.MTPROTO_DISCOVERY_STATE_LIMIT || "50");
 const settleMs = Number(process.env.MTPROTO_DISCOVERY_SETTLE_MS || "1400");
+const clickTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS || "3500");
 const startPayload = (process.env.MTPROTO_DISCOVERY_START_PAYLOAD || botStartPayload).trim();
 const denyButtonRe = new RegExp(
   process.env.MTPROTO_DISCOVERY_DENY_BUTTON_RE ||
@@ -135,7 +136,8 @@ async function clickPathButton(peer: MtprotoPeer, label: string): Promise<void> 
     columnIndex: found.button.columnIndex,
     ...(found.button.dataBase64 ? { buttonDataBase64: found.button.dataBase64 } : {}),
     buttonText: found.button.text,
-    allowTimeoutAsSuccess: true
+    allowTimeoutAsSuccess: true,
+    clickTimeoutMs
   };
 
   await clickMtprotoButton(peer, found.message.id, selector);
