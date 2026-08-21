@@ -392,7 +392,7 @@ const STATE_KEYWORDS: Array<{
   },
   {
     stateType: "money_or_withdrawal",
-    pattern: /баланс|balance|withdraw|вывод|earnings|деньг|оплат|pay/i,
+    pattern: /баланс|balance|withdraw|вывод|earnings|gesamtverdienst|bestätigung|verdienst|деньг|оплат|pay/i,
     purpose: "Показать деньги, выплаты или финансовое действие.",
     expectedBehavior: ["Суммы и статусы понятны.", "Опасные действия требуют подтверждения."],
     risks: ["Автотест может случайно нажать финансовое действие.", "Не хватает подтверждения перед выводом."],
@@ -1335,12 +1335,14 @@ const COMMAND_SCENARIO_DRAFTS: Array<{
     id: "view-earnings",
     title: "earnings",
     safety: "safe",
-    hintPattern: /view_earnings|earnings|заработ|баланс|balance|pending|ожида/i,
+    hintPattern: /view_earnings|earnings|gesamtverdienst|bestätigung|verdienst|заработ|баланс|balance|pending|ожида/i,
     expectTextAny: [
       "Общий заработок",
       "Ожидающие одобрения",
       "Total earnings",
       "Pending approval",
+      "Gesamtverdienst",
+      "Wartet auf Bestätigung",
       "Balance",
       "баланс"
     ]

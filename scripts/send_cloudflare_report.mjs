@@ -113,6 +113,7 @@ function readGeneratedSuiteReport() {
       report_file: generatedSuiteReportFile,
       suite: parsed.suite || null,
       summary: parsed.summary || null,
+      coverage: parsed.coverage || null,
       source_artifacts: Array.isArray(parsed.sourceArtifacts) ? parsed.sourceArtifacts : [],
       draft_count: drafts.length,
       included_draft_count: boundedDrafts.length,

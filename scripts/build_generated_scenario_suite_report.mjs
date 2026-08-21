@@ -240,6 +240,20 @@ function buildMarkdown(payload) {
     lines.push("");
   }
 
+  if (payload.coverage) {
+    lines.push("## Coverage", "");
+    lines.push(`- Drafts discovered: ${Number(payload.coverage.discovered) || 0}`);
+    lines.push(`- Selected before limit: ${Number(payload.coverage.selectedBeforeLimit) || 0}`);
+    lines.push(`- Selected for run: ${Number(payload.coverage.selected) || 0}`);
+    lines.push(`- Runnable safe: ${Number(payload.coverage.runnableSafe) || 0}`);
+    lines.push(`- Runnable test-account: ${Number(payload.coverage.runnableTestAccount) || 0}`);
+    lines.push(`- Manual/not runnable: ${Number(payload.coverage.manual) || 0}/${Number(payload.coverage.notRunnable) || 0}`);
+    if (Number(payload.coverage.limitedOut) > 0) {
+      lines.push(`- Limited out by maxDrafts: ${Number(payload.coverage.limitedOut)}`);
+    }
+    lines.push("");
+  }
+
   lines.push("## Branch Results", "");
   for (const draft of payload.drafts) {
     lines.push(`### ${draft.id}`);
@@ -324,6 +338,7 @@ const payload = {
     failed: countByStatus(draftResults, "failed"),
     notRun: countByStatus(draftResults, "not_run")
   },
+  coverage: suite.coverage || null,
   sourceArtifacts,
   drafts: draftResults
 };

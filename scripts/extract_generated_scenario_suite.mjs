@@ -92,6 +92,43 @@ function uniqueDrafts(drafts) {
   return result;
 }
 
+function countDrafts(drafts, predicate) {
+  return drafts.filter((draft) => {
+    try {
+      return predicate(draft);
+    } catch {
+      return false;
+    }
+  }).length;
+}
+
+function countBySourceType(drafts) {
+  const counts = {};
+  for (const draft of drafts) {
+    const sourceType = String(draft?.source?.type || "unknown").trim() || "unknown";
+    counts[sourceType] = (counts[sourceType] || 0) + 1;
+  }
+  return counts;
+}
+
+function buildCoverage(drafts, selectedBeforeLimit, selectedAfterLimit, selector, maxDrafts, allowTestAccount) {
+  return {
+    selector: selector || "safe",
+    maxDrafts,
+    allowTestAccount,
+    discovered: drafts.length,
+    selectedBeforeLimit: selectedBeforeLimit.length,
+    selected: selectedAfterLimit.length,
+    limitedOut: Math.max(0, selectedBeforeLimit.length - selectedAfterLimit.length),
+    runnable: countDrafts(drafts, isExecutableDraft),
+    runnableSafe: countDrafts(drafts, (draft) => isExecutableDraft(draft) && draft.safety === "safe"),
+    runnableTestAccount: countDrafts(drafts, (draft) => isExecutableDraft(draft) && draft.safety === "test-account"),
+    manual: countDrafts(drafts, (draft) => draft?.safety === "manual"),
+    notRunnable: countDrafts(drafts, (draft) => !isExecutableDraft(draft)),
+    bySourceType: countBySourceType(drafts)
+  };
+}
+
 function selectDrafts(bundle, selector, allowTestAccount) {
   const drafts = bundle.drafts.filter(Boolean);
   const normalized = (selector || "safe").trim();
@@ -137,7 +174,9 @@ const maxDrafts = Math.max(1, Number(process.env.GENERATED_SCENARIO_MAX_DRAFTS |
 const bundle = readJson(sourcePath);
 assertDraftBundle(bundle);
 
-const selected = uniqueDrafts(selectDrafts(bundle, selectorInput, allowTestAccount)).slice(0, maxDrafts);
+const drafts = bundle.drafts.filter(Boolean);
+const selectedBeforeLimit = uniqueDrafts(selectDrafts(bundle, selectorInput, allowTestAccount));
+const selected = selectedBeforeLimit.slice(0, maxDrafts);
 if (selected.length === 0) {
   fail(`No executable drafts selected by selector: ${selectorInput || "safe"}`);
 }
@@ -155,6 +194,7 @@ const suite = {
     aiEnabled: bundle.source?.aiEnabled ?? null,
     aiModel: bundle.source?.aiModel ?? null
   },
+  coverage: buildCoverage(drafts, selectedBeforeLimit, selected, selectorInput, maxDrafts, allowTestAccount),
   drafts: selected.map((draft) => ({
     id: draft.id,
     safety: draft.safety,
@@ -173,6 +213,7 @@ console.log(
       source: sourcePath,
       output: outputPath,
       selector: selectorInput || "safe",
+      coverage: suite.coverage,
       selected: suite.drafts.map((draft) => ({
         id: draft.id,
         safety: draft.safety,

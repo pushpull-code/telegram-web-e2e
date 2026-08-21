@@ -216,6 +216,11 @@ function generatedSuiteLabel(lang, key) {
       steps: "\u0448\u0430\u0433\u043e\u0432",
       attempts: "\u043f\u043e\u043f\u044b\u0442\u043e\u043a",
       error: "\u043e\u0448\u0438\u0431\u043a\u0430",
+      discovered: "\u043d\u0430\u0439\u0434\u0435\u043d\u043e",
+      selected: "\u0432\u044b\u0431\u0440\u0430\u043d\u043e",
+      manual: "manual",
+      testAccount: "test-account",
+      limitedOut: "\u043d\u0435 \u0432\u043e\u0448\u043b\u043e \u0438\u0437-\u0437\u0430 \u043b\u0438\u043c\u0438\u0442\u0430",
       more: "\u0435\u0449\u0435",
       branches: "\u0432\u0435\u0442\u043e\u043a"
     },
@@ -229,6 +234,11 @@ function generatedSuiteLabel(lang, key) {
       steps: "steps",
       attempts: "attempts",
       error: "error",
+      discovered: "discovered",
+      selected: "selected",
+      manual: "manual",
+      testAccount: "test-account",
+      limitedOut: "limited out",
       more: "more",
       branches: "branches"
     }
@@ -264,6 +274,9 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
   const summary = generatedSuite.summary && typeof generatedSuite.summary === "object"
     ? generatedSuite.summary
     : {};
+  const coverage = generatedSuite.coverage && typeof generatedSuite.coverage === "object"
+    ? generatedSuite.coverage
+    : null;
   const drafts = Array.isArray(generatedSuite.drafts) ? generatedSuite.drafts : [];
   const total = numberOrZero(summary.total) || numberOrZero(generatedSuite.draft_count) || drafts.length;
   if (total === 0 && drafts.length === 0) {
@@ -281,6 +294,19 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
       `${generatedSuiteLabel(lang, "notRun")}: ${numberOrZero(summary.notRun)}`
     ].join(", ")
   ];
+
+  if (coverage) {
+    const coverageParts = [
+      `${generatedSuiteLabel(lang, "discovered")}: ${numberOrZero(coverage.discovered)}`,
+      `${generatedSuiteLabel(lang, "selected")}: ${numberOrZero(coverage.selected)}`,
+      `${generatedSuiteLabel(lang, "manual")}: ${numberOrZero(coverage.manual)}`,
+      `${generatedSuiteLabel(lang, "testAccount")}: ${numberOrZero(coverage.runnableTestAccount)}`
+    ];
+    if (numberOrZero(coverage.limitedOut) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "limitedOut")}: ${numberOrZero(coverage.limitedOut)}`);
+    }
+    lines.push(coverageParts.join(", "));
+  }
 
   const maxDrafts = 6;
   for (const draft of drafts.slice(0, maxDrafts)) {
