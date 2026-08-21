@@ -10,8 +10,12 @@ const durationSec = Number(process.env.RUN_DURATION_SEC || "0");
 const runUrl = (process.env.RUN_URL || "").trim();
 const screenshotsFile = (process.env.SCREENSHOTS_FILE || ".cloudflare-report-screenshots.json").trim();
 const failureFile = (process.env.FAILURE_FILE || ".cloudflare-report-failure.json").trim();
+const generatedSuiteReportFile = (
+  process.env.GENERATED_SUITE_REPORT_FILE || "generated-scenario-source/generated-scenario-suite-report.json"
+).trim();
 const maxChunkBase64Chars = Number(process.env.REPORT_CALLBACK_CHUNK_BASE64_MAX || "1500000");
 const maxChunkFiles = Number(process.env.REPORT_CALLBACK_CHUNK_FILE_MAX || "4");
+const maxGeneratedSuiteDrafts = Number(process.env.REPORT_CALLBACK_GENERATED_SUITE_MAX_DRAFTS || "8");
 
 if (!chatId) {
   console.log("CHAT_ID is empty. Skip callback.");
@@ -51,6 +55,79 @@ if (fs.existsSync(failureFile)) {
   }
 }
 
+function compactText(value, maxLength = 240) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function countStepsByStatus(steps, status) {
+  return steps.filter((step) => String(step?.status || "").toLowerCase() === status).length;
+}
+
+function readGeneratedSuiteReport() {
+  if (!fs.existsSync(generatedSuiteReportFile)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(generatedSuiteReportFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const drafts = Array.isArray(parsed.drafts) ? parsed.drafts : [];
+    const boundedDrafts = drafts.slice(0, Math.max(1, maxGeneratedSuiteDrafts)).map((draft) => {
+      const steps = Array.isArray(draft?.steps) ? draft.steps : [];
+      return {
+        id: compactText(draft?.id, 80),
+        status: compactText(draft?.status, 40),
+        scenario: compactText(draft?.scenario, 120),
+        safety: compactText(draft?.safety, 40),
+        source_type: compactText(draft?.sourceType, 80),
+        attempts: Number.isFinite(Number(draft?.attempts)) ? Number(draft.attempts) : 0,
+        step_count: steps.length,
+        passed_steps: countStepsByStatus(steps, "passed"),
+        failed_steps: countStepsByStatus(steps, "failed"),
+        first_error: compactText(draft?.firstError, 320),
+        steps: steps.slice(0, 8).map((step) => ({
+          index: Number.isFinite(Number(step?.index)) ? Number(step.index) : 0,
+          name: compactText(step?.name, 120),
+          status: compactText(step?.status, 40),
+          action: compactText(step?.action, 180),
+          error: compactText(step?.error, 240)
+        })),
+        last_tail: Array.isArray(steps.at(-1)?.tail)
+          ? steps.at(-1).tail.slice(-2).map((line) => compactText(line, 180)).filter(Boolean)
+          : []
+      };
+    });
+
+    return {
+      schema_version: 1,
+      report_file: generatedSuiteReportFile,
+      suite: parsed.suite || null,
+      summary: parsed.summary || null,
+      source_artifacts: Array.isArray(parsed.sourceArtifacts) ? parsed.sourceArtifacts : [],
+      draft_count: drafts.length,
+      included_draft_count: boundedDrafts.length,
+      drafts: boundedDrafts
+    };
+  } catch (error) {
+    console.log(
+      `Failed to parse ${generatedSuiteReportFile}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+}
+
+const generatedSuiteReport = readGeneratedSuiteReport();
+
 function reportEnvelope(extra = {}) {
   return {
     chat_id: chatId,
@@ -61,6 +138,7 @@ function reportEnvelope(extra = {}) {
     run_url: runUrl,
     failure_code: failureCode,
     failure_message: failureMessage,
+    ...(generatedSuiteReport ? { generated_suite: generatedSuiteReport } : {}),
     ...extra
   };
 }

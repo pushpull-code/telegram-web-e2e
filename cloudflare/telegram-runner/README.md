@@ -74,3 +74,6 @@ Workflow `telegram-web-e2e.yml` (updated in this repo) will send callback payloa
 - scenario name/key
 - run URL
 - up to 3 screenshots in base64
+- generated scenario suite summary when `generated_scenarios` was run
+
+For `generated_scenarios`, the worker adds a short branch-check block to the Telegram report: total drafts, passed/flaky/failed/not-run counts, and one compact line per generated branch.

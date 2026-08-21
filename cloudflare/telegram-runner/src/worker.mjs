@@ -115,6 +115,120 @@ function failureReasonText(lang, failureCode, failureMessage) {
   return String(failureMessage || "").trim();
 }
 
+function compactReportText(value, maxLength = 180) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function generatedSuiteLabel(lang, key) {
+  const labels = {
+    [LANG_RU]: {
+      title: "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0432\u0435\u0442\u043e\u043a",
+      total: "\u0432\u0441\u0435\u0433\u043e",
+      passed: "\u043f\u0440\u043e\u0448\u043b\u043e",
+      failed: "\u0443\u043f\u0430\u043b\u043e",
+      flaky: "\u043d\u0435\u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e",
+      notRun: "\u043d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u043b\u043e\u0441\u044c",
+      steps: "\u0448\u0430\u0433\u043e\u0432",
+      attempts: "\u043f\u043e\u043f\u044b\u0442\u043e\u043a",
+      error: "\u043e\u0448\u0438\u0431\u043a\u0430",
+      more: "\u0435\u0449\u0435",
+      branches: "\u0432\u0435\u0442\u043e\u043a"
+    },
+    [LANG_EN]: {
+      title: "Branch checks",
+      total: "total",
+      passed: "passed",
+      failed: "failed",
+      flaky: "flaky",
+      notRun: "not run",
+      steps: "steps",
+      attempts: "attempts",
+      error: "error",
+      more: "more",
+      branches: "branches"
+    }
+  };
+  const safeLang = lang === LANG_EN ? LANG_EN : LANG_RU;
+  return labels[safeLang][key] || labels[LANG_RU][key] || key;
+}
+
+function generatedSuiteStatusText(lang, status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "passed" || normalized === "success") {
+    return generatedSuiteLabel(lang, "passed");
+  }
+  if (normalized === "failed" || normalized === "failure") {
+    return generatedSuiteLabel(lang, "failed");
+  }
+  if (normalized === "flaky") {
+    return generatedSuiteLabel(lang, "flaky");
+  }
+  return generatedSuiteLabel(lang, "notRun");
+}
+
+function numberOrZero(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function formatGeneratedSuiteText(lang, generatedSuite) {
+  if (!generatedSuite || typeof generatedSuite !== "object") {
+    return "";
+  }
+
+  const summary = generatedSuite.summary && typeof generatedSuite.summary === "object"
+    ? generatedSuite.summary
+    : {};
+  const drafts = Array.isArray(generatedSuite.drafts) ? generatedSuite.drafts : [];
+  const total = numberOrZero(summary.total) || numberOrZero(generatedSuite.draft_count) || drafts.length;
+  if (total === 0 && drafts.length === 0) {
+    return "";
+  }
+
+  const lines = [
+    "",
+    generatedSuiteLabel(lang, "title"),
+    [
+      `${generatedSuiteLabel(lang, "total")}: ${total}`,
+      `${generatedSuiteLabel(lang, "passed")}: ${numberOrZero(summary.passed)}`,
+      `${generatedSuiteLabel(lang, "flaky")}: ${numberOrZero(summary.flaky)}`,
+      `${generatedSuiteLabel(lang, "failed")}: ${numberOrZero(summary.failed)}`,
+      `${generatedSuiteLabel(lang, "notRun")}: ${numberOrZero(summary.notRun)}`
+    ].join(", ")
+  ];
+
+  const maxDrafts = 6;
+  for (const draft of drafts.slice(0, maxDrafts)) {
+    const id = compactReportText(draft?.id || draft?.scenario || "draft", 70);
+    const status = generatedSuiteStatusText(lang, draft?.status);
+    const stepCount = numberOrZero(draft?.step_count) || (Array.isArray(draft?.steps) ? draft.steps.length : 0);
+    const passedSteps = numberOrZero(draft?.passed_steps);
+    const attempts = numberOrZero(draft?.attempts);
+    const stepText = stepCount > 0
+      ? `, ${generatedSuiteLabel(lang, "steps")}: ${passedSteps}/${stepCount}`
+      : "";
+    const attemptsText = attempts > 1 ? `, ${generatedSuiteLabel(lang, "attempts")}: ${attempts}` : "";
+    lines.push(`- ${id}: ${status}${stepText}${attemptsText}`);
+
+    const firstError = compactReportText(draft?.first_error, 220);
+    if (firstError && String(draft?.status || "").toLowerCase() !== "passed") {
+      lines.push(`  ${generatedSuiteLabel(lang, "error")}: ${firstError}`);
+    }
+  }
+
+  if (drafts.length > maxDrafts) {
+    lines.push(`- ${generatedSuiteLabel(lang, "more")} ${drafts.length - maxDrafts} ${generatedSuiteLabel(lang, "branches")}`);
+  }
+
+  return lines.join("\n");
+}
+
 async function telegramJson(env, method, payload) {
   const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -456,6 +570,7 @@ async function handleGithubReport(env, request) {
   const statusLine = runStatusText(lang, payload.status || "failure");
   const phase = String(payload.phase || "single").trim().toLowerCase();
   const failureReason = failureReasonText(lang, payload.failure_code, payload.failure_message);
+  const generatedSuiteText = formatGeneratedSuiteText(lang, payload.generated_suite);
 
   const reportText = [
     t(lang, "reportTitle"),
@@ -463,7 +578,8 @@ async function handleGithubReport(env, request) {
     `${t(lang, "reportStatus")}: ${statusLine}`,
     failureReason ? `${t(lang, "reportReason")}: ${failureReason}` : "",
     `${t(lang, "reportDuration")}: ${duration}`,
-    runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : ""
+    runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : "",
+    generatedSuiteText
   ]
     .filter(Boolean)
     .join("\n");

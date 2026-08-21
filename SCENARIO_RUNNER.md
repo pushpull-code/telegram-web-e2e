@@ -217,6 +217,7 @@ bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | sc
 
 The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json` or `scenario-suite.json`.
 For `generated_scenarios`, it also includes `generated-scenario-suite-report.md` and `.json` so the bot or a later AI pass can review the full picture, not just one failed step.
+When a Cloudflare report callback is configured, `send_cloudflare_report.mjs` includes a bounded `generated_suite` payload from `generated-scenario-suite-report.json`; the Telegram runner worker renders it as a compact branch-check block.
 
 The Telegram dispatch script also accepts:
 

@@ -304,4 +304,5 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SCREENSHOTS_FILE: ${{ env.SCREENSHOTS_FILE }}
           FAILURE_FILE: ${{ env.FAILURE_FILE }}
+          GENERATED_SUITE_REPORT_FILE: generated-scenario-source/generated-scenario-suite-report.json
         run: node scripts/send_cloudflare_report.mjs
