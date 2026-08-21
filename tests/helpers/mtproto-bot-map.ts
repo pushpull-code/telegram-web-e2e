@@ -1310,7 +1310,9 @@ const COMMAND_SCENARIO_DRAFTS: Array<{
       "Active",
       "Tasks",
       "Aufgaben",
-      "Prüfung"
+      "Prüfung",
+      "Die Liste ist leer",
+      "Liste ist leer"
     ]
   },
   {
