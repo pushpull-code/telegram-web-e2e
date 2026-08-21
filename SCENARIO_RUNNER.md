@@ -135,6 +135,9 @@ Discovery controls:
 - `MTPROTO_DISCOVERY_WEB_TARGETS=0` to disable URL/WebApp checks
 - `MTPROTO_DISCOVERY_MAX_URL_AUDITS` default `5`
 - `MTPROTO_DISCOVERY_WEB_TARGET_TIMEOUT_MS` default `20000`
+- `MTPROTO_DISCOVERY_WEB_SAFE_CLICKS=1` to enable limited safe clicks inside URL/WebApp pages
+- `MTPROTO_DISCOVERY_MAX_WEB_SAFE_CLICKS` default `2`
+- `MTPROTO_DISCOVERY_WEB_UNSAFE_INTERACTION_RE` to override unsafe interaction labels
 
 Artifacts:
 
@@ -149,7 +152,8 @@ test-results/<run>/mtproto-discovery/qa-report.md
 `bot-map.enriched.json` contains per-node purpose, expected behavior, risks, suggested tests, branch analysis, product summary, and optional staged AI review.
 When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, branch-by-branch analysis, scenario plan, defects, coverage gaps, product questions, next-run recommendation, and short Telegram summary.
 `qa-report.md` is the readable report built from the staged AI output, with heuristic fallback when AI is disabled or returns an invalid shape.
-URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
+URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, page text sample, headings, visible links/buttons/inputs/forms, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
+Safe clicks are disabled by default. When `MTPROTO_DISCOVERY_WEB_SAFE_CLICKS=1`, the runner only clicks limited same-origin non-destructive link/button candidates and records after-click URL/title/screenshot/network evidence.
 
 ## GitHub Actions
 

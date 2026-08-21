@@ -91,6 +91,54 @@ export type WebTargetAudit = {
   ok: boolean;
   durationMs: number;
   screenshotFile: string | null;
+  pageSnapshot: WebPageSnapshot | null;
+  suggestedInteractions: string[];
+  interactions: WebInteractionAudit[];
+  consoleMessages: Array<{
+    type: string;
+    text: string;
+  }>;
+  failedRequests: Array<{
+    method: string;
+    url: string;
+    errorText: string;
+  }>;
+  errors: string[];
+};
+
+export type WebPageSnapshot = {
+  bodyTextSample: string;
+  headings: string[];
+  counts: {
+    headings: number;
+    links: number;
+    buttons: number;
+    inputs: number;
+    forms: number;
+  };
+  elements: WebPageElementSummary[];
+};
+
+export type WebPageElementSummary = {
+  kind: "heading" | "link" | "button" | "input" | "form";
+  text: string;
+  tagName: string;
+  href?: string;
+  inputType?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  domIndex?: number;
+};
+
+export type WebInteractionAudit = {
+  action: "click";
+  targetText: string;
+  targetKind: string;
+  beforeUrl: string | null;
+  afterUrl: string | null;
+  title: string | null;
+  screenshotFile: string | null;
+  ok: boolean;
   consoleMessages: Array<{
     type: string;
     text: string;
@@ -615,6 +663,28 @@ function compactMapForAi(
       ok: audit.ok,
       durationMs: audit.durationMs,
       screenshotFile: audit.screenshotFile,
+      pageSnapshot: audit.pageSnapshot
+        ? {
+            bodyTextSample: audit.pageSnapshot.bodyTextSample,
+            headings: audit.pageSnapshot.headings,
+            counts: audit.pageSnapshot.counts,
+            elements: audit.pageSnapshot.elements.slice(0, 25)
+          }
+        : null,
+      suggestedInteractions: audit.suggestedInteractions,
+      interactions: audit.interactions.map((interaction) => ({
+        action: interaction.action,
+        targetText: interaction.targetText,
+        targetKind: interaction.targetKind,
+        beforeUrl: interaction.beforeUrl,
+        afterUrl: interaction.afterUrl,
+        title: interaction.title,
+        screenshotFile: interaction.screenshotFile,
+        ok: interaction.ok,
+        consoleMessages: interaction.consoleMessages,
+        failedRequests: interaction.failedRequests,
+        errors: interaction.errors
+      })),
       consoleMessages: audit.consoleMessages,
       failedRequests: audit.failedRequests,
       errors: audit.errors
@@ -824,10 +894,47 @@ export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
         `Status: ${audit.status ?? "-"}`,
         `Title: ${audit.title || "-"}`,
         `Screenshot: ${audit.screenshotFile || "-"}`,
-        "",
-        "Console:",
-        ...markdownList(
-          audit.consoleMessages.map((message) => `${message.type}: ${message.text}`),
+          "",
+          "Page snapshot:",
+          ...(audit.pageSnapshot
+            ? [
+                `- headings: ${audit.pageSnapshot.counts.headings}`,
+                `- links: ${audit.pageSnapshot.counts.links}`,
+                `- buttons: ${audit.pageSnapshot.counts.buttons}`,
+                `- inputs: ${audit.pageSnapshot.counts.inputs}`,
+                `- forms: ${audit.pageSnapshot.counts.forms}`,
+                ...markdownList(
+                  audit.pageSnapshot.headings.map((heading) => `heading: ${heading}`),
+                  "нет headings"
+                ),
+                ...markdownList(
+                  audit.pageSnapshot.elements
+                    .slice(0, 12)
+                    .map((element) =>
+                      `${element.kind}: ${element.text || element.placeholder || element.href || element.tagName}`
+                    ),
+                  "нет visible elements"
+                )
+              ]
+            : ["- snapshot не собран"]),
+          "",
+          "Suggested interactions:",
+          ...markdownList(audit.suggestedInteractions, "нет suggested interactions"),
+          "",
+          "Safe interactions:",
+          ...markdownList(
+            audit.interactions.map(
+              (interaction) =>
+                `${interaction.ok ? "ok" : "failed"} click ${interaction.targetKind} "${interaction.targetText}" -> ${
+                  interaction.afterUrl || "-"
+                }`
+            ),
+            "не запускались"
+          ),
+          "",
+          "Console:",
+          ...markdownList(
+            audit.consoleMessages.map((message) => `${message.type}: ${message.text}`),
           "нет сообщений"
         ),
         "",
