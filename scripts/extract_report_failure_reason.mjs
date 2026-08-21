@@ -3,6 +3,9 @@ import fs from "node:fs";
 const logPath = (process.argv[2] || "autorun-output.log").trim();
 const outputPath = (process.argv[3] || ".cloudflare-report-failure.json").trim();
 const runStatus = String(process.env.RUN_STATUS || "").trim().toLowerCase();
+const generatedSuiteReportPath = (
+  process.env.GENERATED_SUITE_REPORT_FILE || "generated-scenario-source/generated-scenario-suite-report.json"
+).trim();
 
 function writeResult(result) {
   fs.writeFileSync(outputPath, JSON.stringify(result));
@@ -12,6 +15,38 @@ function writeResult(result) {
 if (runStatus === "success") {
   writeResult({});
   process.exit(0);
+}
+
+if (fs.existsSync(generatedSuiteReportPath)) {
+  try {
+    const report = JSON.parse(fs.readFileSync(generatedSuiteReportPath, "utf8"));
+    const failedDrafts = Array.isArray(report?.drafts)
+      ? report.drafts.filter((draft) => String(draft?.status || "").toLowerCase() === "failed")
+      : [];
+    const firstFailedDraft = failedDrafts[0];
+    if (firstFailedDraft) {
+      const failedStep = Array.isArray(firstFailedDraft.steps)
+        ? firstFailedDraft.steps.find((step) => String(step?.status || "").toLowerCase() === "failed")
+        : null;
+      const draftId = String(firstFailedDraft.id || firstFailedDraft.scenario || "generated scenario").trim();
+      const stepName = String(failedStep?.name || "").trim();
+      const stepError = String(failedStep?.error || firstFailedDraft.firstError || "").replace(/\s+/g, " ").trim();
+
+      writeResult({
+        code: "generated_suite_failed",
+        message: [
+          `Generated scenario failed: ${draftId}`,
+          stepName ? `step: ${stepName}` : "",
+          stepError ? `error: ${stepError}` : ""
+        ].filter(Boolean).join("; ")
+      });
+      process.exit(0);
+    }
+  } catch (error) {
+    console.log(
+      `Failed to parse ${generatedSuiteReportPath}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 if (!fs.existsSync(logPath)) {
