@@ -327,6 +327,7 @@ async function requestAiReview(inputPayload) {
   const baseUrl = (process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1")
     .trim()
     .replace(/\/+$/, "");
+  const timeoutMs = Number(process.env.AI_REVIEW_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || "60000");
 
   if (!apiKey) {
     return {
@@ -339,50 +340,68 @@ async function requestAiReview(inputPayload) {
   }
 
   const prompt = buildPrompt(inputPayload);
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.15,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a strict Telegram bot QA critic. Return valid JSON only. Separate evidence from inference."
-        },
-        { role: "user", content: prompt }
-      ]
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000);
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.15,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict Telegram bot QA critic. Return valid JSON only. Separate evidence from inference."
+          },
+          { role: "user", content: prompt }
+        ]
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        enabled: true,
+        provider,
+        model,
+        promptVersion: PROMPT_VERSION,
+        error: `AI request failed: ${response.status} ${payload?.error?.message || "unknown_error"}`
+      };
+    }
+
+    const rawText = String(payload?.choices?.[0]?.message?.content || "").trim();
+    const parsed = extractJsonObject(rawText);
+
     return {
       enabled: true,
       provider,
       model,
       promptVersion: PROMPT_VERSION,
-      error: `AI request failed: ${response.status} ${payload?.error?.message || "unknown_error"}`
+      rawText,
+      ...(parsed
+        ? { review: normalizeReview(parsed), parsed }
+        : { parseError: "AI response did not contain parseable JSON." })
     };
+  } catch (error) {
+    return {
+      enabled: true,
+      provider,
+      model,
+      promptVersion: PROMPT_VERSION,
+      error: error instanceof Error && error.name === "AbortError"
+        ? `AI request timed out after ${Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000}ms`
+        : error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const rawText = String(payload?.choices?.[0]?.message?.content || "").trim();
-  const parsed = extractJsonObject(rawText);
-
-  return {
-    enabled: true,
-    provider,
-    model,
-    promptVersion: PROMPT_VERSION,
-    rawText,
-    ...(parsed
-      ? { review: normalizeReview(parsed), parsed }
-      : { parseError: "AI response did not contain parseable JSON." })
-  };
 }
 
 function fallbackReview(inputPayload) {

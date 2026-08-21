@@ -892,6 +892,7 @@ export async function requestAiReview(
   const baseUrl = (process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1")
     .trim()
     .replace(/\/+$/, "");
+  const timeoutMs = Number(process.env.MTPROTO_DISCOVERY_AI_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || "60000");
 
   if (!apiKey) {
     return {
@@ -903,10 +904,13 @@ export async function requestAiReview(
   }
 
   const prompt = buildAiQaPrompt(map, heuristic, webTargetAudits);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000);
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
+      signal: controller.signal,
       headers: {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json"
@@ -965,8 +969,12 @@ export async function requestAiReview(
       enabled: true,
       provider,
       model,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error && error.name === "AbortError"
+        ? `AI request timed out after ${Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000}ms`
+        : error instanceof Error ? error.message : String(error)
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
