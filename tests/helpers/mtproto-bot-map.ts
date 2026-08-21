@@ -252,6 +252,71 @@ export type GeneratedQaPlan = {
   nextRun: AiQaReport["nextRun"] | null;
 };
 
+export type GeneratedExecutableScenarioStep = {
+  name: string;
+  openBot?: boolean;
+  openStartPayload?: string;
+  send?: string;
+  clickButton?: string;
+  clickButtonAny?: string[];
+  waitMs?: number;
+  expectComposer?: boolean;
+  expectTextAny?: string[];
+  expectButtonAny?: string[];
+  timeoutMs?: number;
+  optional?: boolean;
+  requireFreshResponse?: boolean;
+};
+
+export type GeneratedExecutableScenarioDefinition = {
+  name: string;
+  bot: string;
+  continueOnFailure: boolean;
+  tailLimit: number;
+  timeoutMs?: number;
+  steps: GeneratedExecutableScenarioStep[];
+};
+
+export type GeneratedExecutableScenarioDraft = {
+  id: string;
+  runnableNow: boolean;
+  safety: "safe" | "test-account" | "manual";
+  blocker: string | null;
+  reason: string;
+  source: {
+    type: "start" | "command" | "button-path" | "web-target" | "skipped-button";
+    nodeId?: string;
+    path?: string[];
+    buttonText?: string;
+    command?: string;
+    evidence: string[];
+  };
+  scenario: GeneratedExecutableScenarioDefinition | null;
+};
+
+export type GeneratedExecutableScenarioBundle = {
+  schemaVersion: 1;
+  generatedAtIso: string;
+  bot: string;
+  startPayload: string;
+  source: {
+    runner: BotMap["runner"];
+    aiEnabled: boolean;
+    aiModel: string;
+    aiPromptVersion: string | null;
+    nodeCount: number;
+    edgeCount: number;
+    webTargetAuditCount: number;
+  };
+  defaults: {
+    runner: "scenario";
+    botExpression: string;
+    startPayloadExpression: string;
+  };
+  drafts: GeneratedExecutableScenarioDraft[];
+  notes: string[];
+};
+
 export type HeuristicEnrichment = {
   mode: "heuristic";
   generatedAtIso: string;
@@ -1191,6 +1256,441 @@ export function buildGeneratedQaPlan(enriched: EnrichedBotMap): GeneratedQaPlan 
       suggestedInteractions: audit.suggestedInteractions
     })),
     nextRun: report?.nextRun || null
+  };
+}
+
+const START_TEXT_ANCHORS = [
+  "Нажми \"Я готов\"",
+  "Нажми \"Я готов!\"",
+  "I’m ready",
+  "Выберите страну",
+  "Страна вашего аккаунта",
+  "Проверьте доступные задания",
+  "Available tasks",
+  "Aufgaben",
+  "Land"
+];
+
+const COMMAND_SCENARIO_DRAFTS: Array<{
+  command: string;
+  id: string;
+  title: string;
+  safety: GeneratedExecutableScenarioDraft["safety"];
+  hintPattern: RegExp;
+  expectTextAny: string[];
+}> = [
+  {
+    command: "/join_task",
+    id: "join-task",
+    title: "join task",
+    safety: "test-account",
+    hintPattern: /join_task|beitreten|задан|task|aufgaben|available|доступн/i,
+    expectTextAny: [
+      "Вы зарегистрировались для выполнения задания",
+      "К сожалению, в данный момент нет доступных задач",
+      "Сейчас нет доступных заданий",
+      "There are no available tasks",
+      "You have been registered for the task",
+      "Next step to complete the task",
+      "Order has already been taken",
+      "Aufgaben"
+    ]
+  },
+  {
+    command: "/my_tasks",
+    id: "my-tasks",
+    title: "my tasks",
+    safety: "safe",
+    hintPattern: /my_tasks|мои задачи|активн|провер|tasks|aufgaben|prüfung/i,
+    expectTextAny: [
+      "Активные задания",
+      "Мои задания",
+      "Проверка",
+      "Available",
+      "Active",
+      "Tasks",
+      "Aufgaben",
+      "Prüfung"
+    ]
+  },
+  {
+    command: "/settings",
+    id: "settings",
+    title: "settings",
+    safety: "safe",
+    hintPattern: /settings|einstellungen|настрой|land|country|страна/i,
+    expectTextAny: [
+      "Настройки",
+      "Settings",
+      "Einstellungen",
+      "Страна",
+      "Country",
+      "Land"
+    ]
+  },
+  {
+    command: "/view_earnings",
+    id: "view-earnings",
+    title: "earnings",
+    safety: "safe",
+    hintPattern: /view_earnings|earnings|заработ|баланс|balance|pending|ожида/i,
+    expectTextAny: [
+      "Общий заработок",
+      "Ожидающие одобрения",
+      "Total earnings",
+      "Pending approval",
+      "Balance",
+      "баланс"
+    ]
+  }
+];
+
+const MANUAL_BUTTON_RE =
+  /delete|remove|withdraw|pay|buy|purchase|order|submit|confirm|cancel|logout|sign out|удал|вывод|оплат|купить|заказ|отправ|подтверд|отмен|выйти|land ändern|change country|country|страна|andorra|germany|deutschland|united states|usa/i;
+const TEST_ACCOUNT_BUTTON_RE = /join|beitreten|task|задан|готов|ready|start|начать|присоедин/i;
+const FLAG_EMOJI_RE = /[\u{1F1E6}-\u{1F1FF}]/u;
+
+function botExpression(bot: string): string {
+  return `\${BOT_USERNAME:-${bot.replace(/^@/, "")}}`;
+}
+
+function startPayloadExpression(startPayload: string): string {
+  return `\${BOT_START_PAYLOAD:-${startPayload || "start"}}`;
+}
+
+function rootNode(enriched: EnrichedBotMap): BotMapNode | undefined {
+  return enriched.nodes.find((node) => node.id === "root") || enriched.nodes.find((node) => node.depth === 0);
+}
+
+function messageAnchors(node: BotMapNode | undefined, fallback: string[] = []): string[] {
+  if (!node) {
+    return fallback;
+  }
+
+  const lines = node.tail
+    .filter((message) => !message.outgoing)
+    .flatMap((message) => message.text.split(/\n+/g))
+    .map((line) => compactText(line, 90))
+    .filter((line) => line.length >= 4 && !/^https?:\/\//i.test(line));
+
+  return unique([...lines.slice(-6), ...fallback]).slice(0, 12);
+}
+
+function buttonAnchors(node: BotMapNode | undefined): string[] {
+  if (!node) {
+    return [];
+  }
+
+  return unique([...node.buttons, ...node.skippedButtons].map((button) => button.text.trim()))
+    .filter((text) => text.length > 0)
+    .slice(0, 10);
+}
+
+function applyNodeExpectations(
+  step: GeneratedExecutableScenarioStep,
+  node: BotMapNode | undefined,
+  fallbackText: string[] = []
+): GeneratedExecutableScenarioStep {
+  const expectTextAny = messageAnchors(node, fallbackText);
+  const expectButtonAny = buttonAnchors(node);
+
+  return {
+    ...step,
+    ...(expectTextAny.length > 0 ? { expectTextAny } : {}),
+    ...(expectButtonAny.length > 0 ? { expectButtonAny } : {})
+  };
+}
+
+function startStep(enriched: EnrichedBotMap): GeneratedExecutableScenarioStep {
+  return applyNodeExpectations(
+    {
+      name: "open start payload",
+      openStartPayload: startPayloadExpression(enriched.startPayload),
+      expectComposer: true,
+      timeoutMs: 45_000,
+      requireFreshResponse: false
+    },
+    rootNode(enriched),
+    START_TEXT_ANCHORS
+  );
+}
+
+function executableScenario(
+  enriched: EnrichedBotMap,
+  name: string,
+  steps: GeneratedExecutableScenarioStep[],
+  options: {
+    continueOnFailure?: boolean;
+    timeoutMs?: number;
+  } = {}
+): GeneratedExecutableScenarioDefinition {
+  return {
+    name,
+    bot: botExpression(enriched.bot),
+    continueOnFailure: options.continueOnFailure ?? false,
+    tailLimit: 120,
+    ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    steps
+  };
+}
+
+function fullMapText(enriched: EnrichedBotMap): string {
+  return [
+    enriched.bot,
+    enriched.startPayload,
+    ...enriched.nodes.flatMap((node) => [
+      node.id,
+      ...node.path,
+      ...node.tail.map((message) => message.text),
+      ...node.buttons.map((button) => button.text),
+      ...node.skippedButtons.map((button) => button.text)
+    ]),
+    ...(enriched.enrichment.ai.report?.scenarioPlan.flatMap((scenario) => [
+      scenario.name,
+      scenario.why,
+      ...scenario.steps
+    ]) || [])
+  ].join("\n");
+}
+
+function commandDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
+  const observedText = fullMapText(enriched);
+
+  return COMMAND_SCENARIO_DRAFTS.map((draft) => {
+    const observed = draft.hintPattern.test(observedText);
+    const scenarioName = `mtproto-generated-command-${draft.id}`;
+
+    return {
+      id: `command-${draft.id}`,
+      runnableNow: true,
+      safety: draft.safety,
+      blocker: draft.safety === "test-account" ? "Run only with a dedicated test Telegram account." : null,
+      reason: observed
+        ? `Command ${draft.command} is relevant to the discovered flow.`
+        : `Command ${draft.command} is a baseline smoke draft; verify it is still supported by the bot menu.`,
+      source: {
+        type: "command",
+        command: draft.command,
+        evidence: observed
+          ? ["bot-map.json", "bot-map.enriched.json", "observed matching flow text"]
+          : ["baseline command draft", "verify against live bot"]
+      },
+      scenario: executableScenario(enriched, scenarioName, [
+        startStep(enriched),
+        {
+          name: draft.title,
+          send: draft.command,
+          expectTextAny: draft.expectTextAny,
+          timeoutMs: 60_000
+        }
+      ])
+    };
+  });
+}
+
+function buttonLabelSafety(label: string): Pick<GeneratedExecutableScenarioDraft, "safety" | "runnableNow" | "blocker"> {
+  if (FLAG_EMOJI_RE.test(label) || MANUAL_BUTTON_RE.test(label)) {
+    return {
+      safety: "manual",
+      runnableNow: false,
+      blocker: "Button may mutate country/payment/task state; review before converting to an executable scenario."
+    };
+  }
+
+  if (TEST_ACCOUNT_BUTTON_RE.test(label)) {
+    return {
+      safety: "test-account",
+      runnableNow: true,
+      blocker: "Run only with a dedicated test Telegram account."
+    };
+  }
+
+  return {
+    safety: "safe",
+    runnableNow: true,
+    blocker: null
+  };
+}
+
+function pathSafety(pathParts: string[]): Pick<GeneratedExecutableScenarioDraft, "safety" | "runnableNow" | "blocker"> {
+  return pathParts.reduce<Pick<GeneratedExecutableScenarioDraft, "safety" | "runnableNow" | "blocker">>(
+    (current, label) => {
+      if (!current.runnableNow) {
+        return current;
+      }
+
+      const next = buttonLabelSafety(label);
+      if (!next.runnableNow || next.safety === "manual") {
+        return next;
+      }
+      if (next.safety === "test-account") {
+        return next;
+      }
+      return current;
+    },
+    { safety: "safe", runnableNow: true, blocker: null }
+  );
+}
+
+function branchPriority(enriched: EnrichedBotMap, node: BotMapNode): number {
+  const aiBranch = enriched.enrichment.ai.report?.branchReviews.find((branch) => branch.nodeId === node.id);
+  const severity = aiBranch?.severity || heuristicPriorityToSeverity(enriched.enrichment.nodeAnalysis[node.id]?.nextStepPriority || "low");
+  return { critical: 4, high: 3, medium: 2, low: 1 }[severity];
+}
+
+function buttonPathScenario(enriched: EnrichedBotMap, node: BotMapNode): GeneratedExecutableScenarioDefinition {
+  const steps: GeneratedExecutableScenarioStep[] = [startStep(enriched)];
+
+  for (const [index, label] of node.path.entries()) {
+    const isLast = index === node.path.length - 1;
+    const baseStep: GeneratedExecutableScenarioStep = {
+      name: `click ${label}`,
+      clickButton: label,
+      timeoutMs: 45_000,
+      waitMs: isLast ? 0 : 1400,
+      requireFreshResponse: false
+    };
+    steps.push(isLast ? applyNodeExpectations(baseStep, node) : baseStep);
+  }
+
+  return executableScenario(enriched, `mtproto-generated-button-${normalizeNodeIdPart(node.path.join("-"))}`, steps);
+}
+
+function buttonPathDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
+  const seen = new Set<string>();
+  const drafts: GeneratedExecutableScenarioDraft[] = [];
+
+  const nodes = enriched.nodes
+    .filter((node) => node.path.length > 0 && !node.error)
+    .sort((left, right) => branchPriority(enriched, right) - branchPriority(enriched, left))
+    .slice(0, 12);
+
+  for (const node of nodes) {
+    const key = node.path.join("\n");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+
+    const safety = pathSafety(node.path);
+    drafts.push({
+      id: `button-path-${normalizeNodeIdPart(node.path.join("-"))}`,
+      ...safety,
+      reason: `Discovered branch path: ${node.path.join(" > ")}.`,
+      source: {
+        type: "button-path",
+        nodeId: node.id,
+        path: node.path,
+        evidence: ["bot-map.json", "bot-map.enriched.json", "qa-report.md"]
+      },
+      scenario: safety.runnableNow ? buttonPathScenario(enriched, node) : null
+    });
+  }
+
+  return drafts;
+}
+
+function webTargetDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
+  return (enriched.webTargetAudits || []).map((audit) => ({
+    id: `web-target-${audit.id}`,
+    runnableNow: false,
+    safety: "manual",
+    blocker: "Current scenario runner drives Telegram chat only; use web-target audit or a dedicated Playwright web scenario.",
+    reason: `URL/WebApp target "${audit.buttonText}" ${audit.ok ? "opened" : "did not open cleanly"} with status ${audit.status ?? "unknown"}.`,
+    source: {
+      type: "web-target",
+      nodeId: audit.nodeId,
+      path: audit.path,
+      buttonText: audit.buttonText,
+      evidence: unique([
+        "web-target-audits.json",
+        audit.screenshotFile || "",
+        audit.title ? `title: ${audit.title}` : "",
+        `url: ${sanitizeReportUrl(audit.url)}`
+      ])
+    },
+    scenario: null
+  }));
+}
+
+function skippedButtonDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
+  const drafts: GeneratedExecutableScenarioDraft[] = [];
+
+  for (const node of enriched.nodes) {
+    for (const button of node.skippedButtons) {
+      if (button.skipReason === "url_or_webapp_terminal") {
+        continue;
+      }
+
+      drafts.push({
+        id: `skipped-button-${node.id}-${normalizeNodeIdPart(button.text)}`,
+        runnableNow: false,
+        safety: "manual",
+        blocker: `Discovery skipped this button: ${button.skipReason || "unknown reason"}.`,
+        reason: `Manual review required before testing "${button.text}".`,
+        source: {
+          type: "skipped-button",
+          nodeId: node.id,
+          path: node.path,
+          buttonText: button.text,
+          evidence: ["bot-map.json", "safe deny/skipped button rules"]
+        },
+        scenario: null
+      });
+    }
+  }
+
+  return drafts.slice(0, 12);
+}
+
+export function buildGeneratedExecutableScenarioBundle(enriched: EnrichedBotMap): GeneratedExecutableScenarioBundle {
+  const startScenario = executableScenario(enriched, "mtproto-generated-start-smoke", [startStep(enriched)]);
+  const drafts: GeneratedExecutableScenarioDraft[] = [
+    {
+      id: "start-smoke",
+      runnableNow: true,
+      safety: "safe",
+      blocker: null,
+      reason: "Open the bot with the discovered start payload and verify the first visible state.",
+      source: {
+        type: "start",
+        nodeId: rootNode(enriched)?.id,
+        evidence: ["bot-map.json", "bot-map.enriched.json"]
+      },
+      scenario: startScenario
+    },
+    ...commandDrafts(enriched),
+    ...buttonPathDrafts(enriched),
+    ...webTargetDrafts(enriched),
+    ...skippedButtonDrafts(enriched)
+  ];
+
+  return {
+    schemaVersion: 1,
+    generatedAtIso: new Date().toISOString(),
+    bot: enriched.bot,
+    startPayload: enriched.startPayload,
+    source: {
+      runner: enriched.runner,
+      aiEnabled: enriched.enrichment.ai.enabled,
+      aiModel: enriched.enrichment.ai.model,
+      aiPromptVersion: enriched.enrichment.ai.promptVersion || null,
+      nodeCount: enriched.nodes.length,
+      edgeCount: enriched.edges.length,
+      webTargetAuditCount: enriched.webTargetAudits?.length || 0
+    },
+    defaults: {
+      runner: "scenario",
+      botExpression: botExpression(enriched.bot),
+      startPayloadExpression: startPayloadExpression(enriched.startPayload)
+    },
+    drafts,
+    notes: [
+      "Discovery does not auto-run these drafts.",
+      "Use only drafts with runnableNow=true as SCENARIO_FILE after review.",
+      "test-account drafts can mutate task assignment or onboarding state; run them only on a dedicated QA Telegram account.",
+      "manual drafts intentionally have no scenario object until a human approves the risk boundary."
+    ]
   };
 }
 

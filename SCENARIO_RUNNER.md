@@ -149,6 +149,7 @@ test-results/<run>/mtproto-discovery/web-targets/*.png
 test-results/<run>/mtproto-discovery/qa-report.md
 test-results/<run>/mtproto-discovery/telegram-summary.txt
 test-results/<run>/mtproto-discovery/generated-test-plan.json
+test-results/<run>/mtproto-discovery/generated-scenarios.json
 ```
 
 `bot-map.enriched.json` contains per-node purpose, expected behavior, risks, suggested tests, branch analysis, product summary, and optional staged AI review.
@@ -156,6 +157,7 @@ When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, b
 `qa-report.md` is the readable report built from the staged AI output, with heuristic fallback when AI is disabled or returns an invalid shape.
 `telegram-summary.txt` is a short sendable summary for chat/reporting integrations.
 `generated-test-plan.json` normalizes AI scenario ideas, branch checks, defects, coverage gaps, questions, web targets, and next-run settings for the future executable scenario generator.
+`generated-scenarios.json` converts the discovered map into scenario-runner draft JSON. Each draft has `runnableNow`, `safety`, `blocker`, `reason`, `source`, and a ready `scenario` object only when the current runner can execute it safely after review.
 URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, page text sample, headings, visible links/buttons/inputs/forms, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
 Safe clicks are disabled by default. When `MTPROTO_DISCOVERY_WEB_SAFE_CLICKS=1`, the runner only clicks limited same-origin non-destructive link/button candidates and records after-click URL/title/screenshot/network evidence.
 

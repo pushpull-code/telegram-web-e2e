@@ -4,6 +4,7 @@ import { test, type ConsoleMessage, type Page, type Request } from "@playwright/
 import { botStartPayload, botUsername } from "./helpers/bot-config";
 import {
   buildEnrichedBotMap,
+  buildGeneratedExecutableScenarioBundle,
   buildGeneratedQaPlan,
   buildQaMarkdownReport,
   buildTelegramSummaryText,
@@ -712,6 +713,13 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     const generatedPlanPath = path.join(outputDir, "generated-test-plan.json");
     fs.writeFileSync(generatedPlanPath, JSON.stringify(buildGeneratedQaPlan(enriched), null, 2), "utf8");
 
+    const generatedScenariosPath = path.join(outputDir, "generated-scenarios.json");
+    fs.writeFileSync(
+      generatedScenariosPath,
+      JSON.stringify(buildGeneratedExecutableScenarioBundle(enriched), null, 2),
+      "utf8"
+    );
+
     await testInfo.attach("mtproto-bot-map", {
       path: rawPath,
       contentType: "application/json"
@@ -734,6 +742,10 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     });
     await testInfo.attach("mtproto-generated-test-plan", {
       path: generatedPlanPath,
+      contentType: "application/json"
+    });
+    await testInfo.attach("mtproto-generated-scenarios", {
+      path: generatedScenariosPath,
       contentType: "application/json"
     });
   });
