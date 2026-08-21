@@ -4,13 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Test suite to run (bot | mtproto | discover_mtproto | scenario | discover | autorun | freelancer | settings | all)'
+        description: 'Test suite to run (bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | autorun | freelancer | settings | all)'
         required: false
         default: 'bot'
       scenario_file:
         description: 'Scenario JSON file for scenario suite'
         required: false
         default: 'scenarios/rate2cash-basic.json'
+      generated_scenario_draft:
+        description: 'Draft id from generated-scenarios.json for generated_scenario suite'
+        required: false
+        default: 'start-smoke'
+      generated_scenario_allow_test_account:
+        description: 'Allow generated drafts marked safety=test-account (true | false)'
+        required: false
+        default: 'false'
       chat_id:
         description: 'Telegram chat id for Cloudflare report callback (optional)'
         required: false
@@ -52,6 +60,8 @@ jobs:
       RUN_LANG: ${{ inputs.lang }}
       RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
       SCENARIO_FILE: ${{ inputs.scenario_file }}
+      GENERATED_SCENARIO_DRAFT: ${{ inputs.generated_scenario_draft }}
+      GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT: ${{ inputs.generated_scenario_allow_test_account }}
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
@@ -123,11 +133,28 @@ jobs:
         run: npm run test:mtproto
 
       - name: Run MTProto discovery with branch analysis
-        if: ${{ inputs.suite == 'discover_mtproto' || inputs.suite == 'all' }}
+        if: ${{ inputs.suite == 'discover_mtproto' || inputs.suite == 'generated_scenario' || inputs.suite == 'all' }}
         run: npm run test:discover:mtproto
 
+      - name: Extract generated scenario draft
+        if: ${{ inputs.suite == 'generated_scenario' }}
+        shell: bash
+        run: |
+          generated_file="$(find test-results -path '*/mtproto-discovery/generated-scenarios.json' -print -quit)"
+          if [ -z "${generated_file}" ]; then
+            echo "::error::generated-scenarios.json was not found under test-results/"
+            exit 1
+          fi
+
+          node scripts/extract_generated_scenario.mjs \
+            "${generated_file}" \
+            "${GENERATED_SCENARIO_DRAFT}" \
+            ".generated-scenario.json"
+
+          echo "SCENARIO_FILE=.generated-scenario.json" >> "${GITHUB_ENV}"
+
       - name: Run scenario tests
-        if: ${{ inputs.suite == 'scenario' || inputs.suite == 'all' }}
+        if: ${{ inputs.suite == 'scenario' || inputs.suite == 'generated_scenario' || inputs.suite == 'all' }}
         run: npm run test:scenario
 
       - name: Run discovery tests

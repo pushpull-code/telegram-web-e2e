@@ -161,19 +161,39 @@ When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, b
 URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, page text sample, headings, visible links/buttons/inputs/forms, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
 Safe clicks are disabled by default. When `MTPROTO_DISCOVERY_WEB_SAFE_CLICKS=1`, the runner only clicks limited same-origin non-destructive link/button candidates and records after-click URL/title/screenshot/network evidence.
 
+Extract one generated draft into a normal scenario file:
+
+```bash
+npm run scenario:extract-generated -- test-results/<run>/mtproto-discovery/generated-scenarios.json start-smoke .generated-scenario.json
+SCENARIO_FILE=.generated-scenario.json npm run test:scenario
+```
+
+Drafts marked `safety=test-account` are blocked by default. Enable them only for a dedicated QA Telegram account:
+
+```bash
+GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1 npm run scenario:extract-generated -- test-results/<run>/mtproto-discovery/generated-scenarios.json command-join-task .generated-scenario.json
+```
+
 ## GitHub Actions
 
 The workflow suite input now supports:
 
 ```text
-bot | mtproto | discover_mtproto | scenario | discover | autorun | freelancer | settings | all
+bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | autorun | freelancer | settings | all
 ```
+
+`generated_scenario` runs MTProto discovery first, extracts the selected draft from `generated-scenarios.json`, then runs the normal scenario runner. Inputs:
+
+- `generated_scenario_draft`: default `start-smoke`
+- `generated_scenario_allow_test_account`: default `false`
 
 The Telegram dispatch script also accepts:
 
 ```text
 /run mtproto
 /run discover_mtproto
+/run generated_scenario
+/run generated_scenario start-smoke
 /run scenario
 /run discover
 ```

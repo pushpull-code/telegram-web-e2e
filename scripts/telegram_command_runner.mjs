@@ -2,6 +2,7 @@ const REQUIRED_SUITES = new Set([
   "bot",
   "mtproto",
   "discover_mtproto",
+  "generated_scenario",
   "scenario",
   "discover",
   "autorun",
@@ -47,16 +48,23 @@ function stripCommandMention(text) {
 
 function parseRunCommand(text) {
   const normalized = stripCommandMention(text.trim());
-  const match = normalized.match(/^\/run(?:\s+([a-z_]+))?$/i);
+  const match = normalized.match(/^\/run(?:\s+([a-z_]+))?(?:\s+([a-z0-9_.:-]+))?$/i);
   if (!match) {
     return null;
   }
 
   const requested = (match[1] || DEFAULT_SUITE).toLowerCase();
+  const draftId = match[2] || "";
   if (!REQUIRED_SUITES.has(requested)) {
     return { error: `Неизвестный сценарий: ${requested}` };
   }
-  return { suite: requested };
+  if (draftId && requested !== "generated_scenario") {
+    return { error: `Draft id можно указывать только для generated_scenario.` };
+  }
+  return {
+    suite: requested,
+    ...(draftId ? { generatedScenarioDraft: draftId } : {})
+  };
 }
 
 async function tgGet(path, searchParams = {}) {
@@ -106,7 +114,12 @@ async function ackUpdate(updateId) {
   }
 }
 
-async function triggerWorkflow(suite) {
+async function triggerWorkflow(suite, options = {}) {
+  const inputs = { suite };
+  if (suite === "generated_scenario" && options.generatedScenarioDraft) {
+    inputs.generated_scenario_draft = options.generatedScenarioDraft;
+  }
+
   const dispatchResponse = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(WORKFLOW_FILE)}/dispatches`,
     {
@@ -118,7 +131,7 @@ async function triggerWorkflow(suite) {
       },
       body: JSON.stringify({
         ref: "main",
-        inputs: { suite }
+        inputs
       })
     }
   );
@@ -218,9 +231,12 @@ async function main() {
     }
 
     const suite = parsed.suite;
-    await sendMessage(chatId, `Запускаю прогон: ${suite}`);
-    const runUrl = await triggerWorkflow(suite);
-    await sendMessage(chatId, `Прогон запущен: ${suite}\n${runUrl}`);
+    const draftSuffix = parsed.generatedScenarioDraft ? ` (${parsed.generatedScenarioDraft})` : "";
+    await sendMessage(chatId, `Запускаю прогон: ${suite}${draftSuffix}`);
+    const runUrl = await triggerWorkflow(suite, {
+      generatedScenarioDraft: parsed.generatedScenarioDraft
+    });
+    await sendMessage(chatId, `Прогон запущен: ${suite}${draftSuffix}\n${runUrl}`);
   } finally {
     if (typeof updateId === "number") {
       await ackUpdate(updateId);
