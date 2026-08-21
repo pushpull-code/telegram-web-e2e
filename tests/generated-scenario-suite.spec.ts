@@ -72,8 +72,6 @@ test.use({
   video: "on"
 });
 
-test.describe.configure({ mode: "serial" });
-
 test.describe(`Generated scenario suite: ${suite.name}`, () => {
   for (const draft of suite.drafts) {
     test(`${draft.id}: ${draft.scenario.name}`, async ({ page }, testInfo) => {
