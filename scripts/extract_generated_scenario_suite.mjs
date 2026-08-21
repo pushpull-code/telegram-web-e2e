@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const OBSERVED_EVIDENCE = "observed matching flow text";
+const OBSERVED_EVIDENCE = "observed exact command mention";
 
 function usage() {
   return [

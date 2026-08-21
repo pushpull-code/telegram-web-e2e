@@ -1450,11 +1450,16 @@ function fullMapText(enriched: EnrichedBotMap): string {
   ].join("\n");
 }
 
+function hasExactCommandMention(command: string, text: string): boolean {
+  return normalizeText(text).includes(normalizeText(command));
+}
+
 function commandDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
   const observedText = fullMapText(enriched);
 
   return COMMAND_SCENARIO_DRAFTS.map((draft) => {
-    const observed = draft.hintPattern.test(observedText);
+    const observed = hasExactCommandMention(draft.command, observedText);
+    const relatedTextObserved = !observed && draft.hintPattern.test(observedText);
     const scenarioName = `mtproto-generated-command-${draft.id}`;
 
     return {
@@ -1464,12 +1469,14 @@ function commandDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDra
       blocker: draft.safety === "test-account" ? "Run only with a dedicated test Telegram account." : null,
       reason: observed
         ? `Command ${draft.command} is relevant to the discovered flow.`
+        : relatedTextObserved
+          ? `Related flow text was observed, but exact command ${draft.command} was not; verify manually.`
         : `Command ${draft.command} is a baseline smoke draft; verify it is still supported by the bot menu.`,
       source: {
         type: "command",
         command: draft.command,
         evidence: observed
-          ? ["bot-map.json", "bot-map.enriched.json", "observed matching flow text"]
+          ? ["bot-map.json", "bot-map.enriched.json", "observed exact command mention"]
           : ["baseline command draft", "verify against live bot"]
       },
       scenario: executableScenario(enriched, scenarioName, [
