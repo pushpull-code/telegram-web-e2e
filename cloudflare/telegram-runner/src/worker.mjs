@@ -1,6 +1,20 @@
 const LANG_RU = "ru";
 const LANG_EN = "en";
 const SCENARIO_START_FINISH = "start_finish";
+const REQUIRED_SUITES = new Set([
+  "bot",
+  "mtproto",
+  "discover_mtproto",
+  "generated_scenario",
+  "generated_scenarios",
+  "scenario",
+  "discover",
+  "autorun",
+  "freelancer",
+  "settings",
+  "all"
+]);
+const GENERATED_SELECTOR_SUITES = new Set(["generated_scenario", "generated_scenarios"]);
 
 const TEXT = {
   [LANG_RU]: {
@@ -68,6 +82,65 @@ function normalizeLang(value) {
   return value === LANG_EN ? LANG_EN : LANG_RU;
 }
 
+function normalizeSuite(value, fallback = "autorun") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (REQUIRED_SUITES.has(normalized)) {
+    return normalized;
+  }
+  const fallbackNormalized = String(fallback || "").trim().toLowerCase();
+  return REQUIRED_SUITES.has(fallbackNormalized) ? fallbackNormalized : "autorun";
+}
+
+function stripCommandMention(text) {
+  return String(text || "").trim().replace(/^(\/\w+)@\w+/i, "$1");
+}
+
+function scenarioKeyForRun(suite, selector) {
+  if (suite === "generated_scenario") {
+    return selector ? `generated_scenario_${selector}` : "generated_scenario_start-smoke";
+  }
+  if (suite === "generated_scenarios") {
+    return selector ? `generated_scenarios_${selector}` : "generated_scenarios_safe";
+  }
+  return suite === "autorun" ? SCENARIO_START_FINISH : suite;
+}
+
+function parseRunText(text, stateLang, defaultSuite) {
+  const normalized = stripCommandMention(text);
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  const firstArg = String(parts[1] || "").trim().toLowerCase();
+  const secondArg = String(parts[2] || "").trim();
+  let lang = normalizeLang(stateLang || LANG_RU);
+  let suite = normalizeSuite(defaultSuite || "autorun");
+  let selector = "";
+
+  if (firstArg === LANG_RU || firstArg === LANG_EN) {
+    lang = normalizeLang(firstArg);
+  } else if (firstArg) {
+    if (!REQUIRED_SUITES.has(firstArg)) {
+      return {
+        error: `Unknown suite: ${firstArg}`
+      };
+    }
+    suite = firstArg;
+    selector = secondArg;
+  }
+
+  if (selector && !GENERATED_SELECTOR_SUITES.has(suite)) {
+    return {
+      error: "Draft selector is allowed only for generated_scenario/generated_scenarios."
+    };
+  }
+
+  return {
+    lang,
+    suite,
+    scenarioKey: scenarioKeyForRun(suite, selector),
+    ...(suite === "generated_scenario" && selector ? { generatedScenarioDraft: selector } : {}),
+    ...(suite === "generated_scenarios" && selector ? { generatedScenarioDrafts: selector } : {})
+  };
+}
+
 function normalizeChatId(chatId) {
   if (chatId === null || chatId === undefined) {
     return "";
@@ -89,6 +162,12 @@ function formatDuration(seconds) {
 function scenarioTitle(lang, scenarioKey) {
   if (scenarioKey === SCENARIO_START_FINISH) {
     return t(lang, "scenarioStartFinish");
+  }
+  if (String(scenarioKey || "").startsWith("generated_scenario_")) {
+    return `generated_scenario: ${String(scenarioKey).slice("generated_scenario_".length)}`;
+  }
+  if (String(scenarioKey || "").startsWith("generated_scenarios_")) {
+    return `generated_scenarios: ${String(scenarioKey).slice("generated_scenarios_".length)}`;
   }
   return scenarioKey;
 }
@@ -371,11 +450,11 @@ function isChatAllowed(env, chatId) {
   return normalizeChatId(chatId) === allowed;
 }
 
-async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
+async function dispatchGithubRun(env, { chatId, lang, scenarioKey, suite, generatedScenarioDraft, generatedScenarioDrafts }) {
   const owner = String(env.GITHUB_OWNER || "").trim();
   const repo = String(env.GITHUB_REPO || "").trim();
   const workflowFile = String(env.GITHUB_WORKFLOW_FILE || "telegram-web-e2e.yml").trim();
-  const suite = String(env.DEFAULT_SUITE || "autorun").trim();
+  const runSuite = normalizeSuite(suite || env.DEFAULT_SUITE || "autorun");
   const ref = String(env.GITHUB_REF || "main").trim();
   const reportCallbackUrl = String(env.REPORT_CALLBACK_URL || "").trim();
   const githubToken = String(env.GITHUB_PAT || "").trim();
@@ -389,7 +468,7 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
   const dispatchBody = {
     ref,
     inputs: {
-      suite,
+      suite: runSuite,
       chat_id: String(chatId),
       lang: String(lang),
       bot_lang: LANG_RU,
@@ -397,6 +476,12 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
       report_callback_url: reportCallbackUrl
     }
   };
+  if (runSuite === "generated_scenario" && generatedScenarioDraft) {
+    dispatchBody.inputs.generated_scenario_draft = String(generatedScenarioDraft);
+  }
+  if (runSuite === "generated_scenarios" && generatedScenarioDrafts) {
+    dispatchBody.inputs.generated_scenario_drafts = String(generatedScenarioDrafts);
+  }
 
   const dispatchResponse = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`,
@@ -454,11 +539,12 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
   return runUrl;
 }
 
-async function triggerScenarioRun(env, chatId, lang, scenarioKey) {
+async function triggerScenarioRun(env, chatId, lang, scenarioKey, runOptions = {}) {
   try {
-    const runUrl = await dispatchGithubRun(env, { chatId, lang, scenarioKey });
+    const runUrl = await dispatchGithubRun(env, { chatId, lang, scenarioKey, ...runOptions });
     const messageText = [
       t(lang, "launchStarted"),
+      `${t(lang, "reportScenario")}: ${scenarioTitle(lang, scenarioKey)}`,
       `${t(lang, "launchLink")} ${runUrl}`,
       t(lang, "launchWaitReport")
     ].join("\n");
@@ -666,9 +752,16 @@ async function handleTelegramWebhook(env, request) {
 
     if (/^\/run\b/i.test(text)) {
       const state = await loadState(env, chatId);
-      const parts = text.split(/\s+/).filter(Boolean);
-      const requestedLang = normalizeLang(parts[1] || state.lang || LANG_RU);
-      await triggerScenarioRun(env, chatId, requestedLang, SCENARIO_START_FINISH);
+      const parsed = parseRunText(text, state.lang || LANG_RU, env.DEFAULT_SUITE || "autorun");
+      if (parsed.error) {
+        await sendMessage(env, chatId, `${parsed.error}\nAllowed suites: ${Array.from(REQUIRED_SUITES).join(", ")}`);
+        return new Response("ok");
+      }
+      await triggerScenarioRun(env, chatId, parsed.lang, parsed.scenarioKey, {
+        suite: parsed.suite,
+        generatedScenarioDraft: parsed.generatedScenarioDraft,
+        generatedScenarioDrafts: parsed.generatedScenarioDrafts
+      });
       return new Response("ok");
     }
 

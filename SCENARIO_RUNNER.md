@@ -232,6 +232,13 @@ The Telegram dispatch script also accepts:
 /run discover
 ```
 
+The Cloudflare Telegram runner worker accepts the same generated commands for live chat-driven runs:
+
+```text
+/run generated_scenario start-smoke
+/run generated_scenarios safe
+```
+
 ## MTProto Smoke
 
 Use this when the chat flow should run through a Telegram user account without depending on Telegram Web selectors.

@@ -8,6 +8,7 @@ Cloudflare Worker for Telegram bot orchestration:
 - starts GitHub Actions workflow run
 - receives completion callback and sends report to Telegram with duration, scenario, run link, screenshots
 - asks user if a new test should be started
+- accepts direct commands like `/run generated_scenarios safe`
 
 ## 1) Create KV namespace
 
@@ -77,3 +78,16 @@ Workflow `telegram-web-e2e.yml` (updated in this repo) will send callback payloa
 - generated scenario suite summary when `generated_scenarios` was run
 
 For `generated_scenarios`, the worker adds a short branch-check block to the Telegram report: total drafts, passed/flaky/failed/not-run counts, and one compact line per generated branch.
+
+## Telegram commands
+
+```text
+/run
+/run ru
+/run en
+/run generated_scenarios
+/run generated_scenarios safe
+/run generated_scenario start-smoke
+```
+
+Selectors are accepted only for `generated_scenario` and `generated_scenarios`.
