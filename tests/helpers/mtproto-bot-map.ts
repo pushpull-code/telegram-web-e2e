@@ -389,10 +389,10 @@ function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
 }
 
 export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichment): Promise<AiReview> {
-  const apiKey = (process.env.OPENAI_API_KEY || process.env.AI_API_KEY || "").trim();
+  const apiKey = (process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "").trim();
   const provider = (process.env.AI_PROVIDER || "openai-compatible").trim();
-  const model = (process.env.OPENAI_MODEL || process.env.AI_MODEL || "gpt-4.1-mini").trim();
-  const baseUrl = (process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || "https://api.openai.com/v1")
+  const model = (process.env.AI_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini").trim();
+  const baseUrl = (process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1")
     .trim()
     .replace(/\/+$/, "");
 
@@ -401,7 +401,7 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
       enabled: false,
       provider,
       model,
-      error: "OPENAI_API_KEY/AI_API_KEY is not configured; heuristic enrichment was used."
+      error: "AI_API_KEY/OPENAI_API_KEY is not configured; heuristic enrichment was used."
     };
   }
 

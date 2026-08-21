@@ -116,6 +116,14 @@ Optional AI enrichment:
 - `OPENAI_BASE_URL` or `AI_BASE_URL` for OpenAI-compatible providers
 - `MTPROTO_DISCOVERY_AI=0` to disable AI review and keep heuristic-only output
 
+DeepSeek example:
+
+```text
+AI_BASE_URL=https://api.deepseek.com
+AI_MODEL=deepseek-v4-flash
+AI_API_KEY=<DeepSeek API key>
+```
+
 Discovery controls:
 
 - `MTPROTO_DISCOVERY_START_PAYLOAD`
