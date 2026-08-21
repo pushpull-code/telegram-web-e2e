@@ -56,14 +56,31 @@ async function mtprotoRequest<T>(path: string, body: unknown): Promise<T> {
     throw new Error("MTPROTO_SERVICE_URL and MTPROTO_SERVICE_TOKEN are required.");
   }
 
-  const response = await fetch(`${config.url}${path}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.token}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
+  const timeoutMs = Number(process.env.MTPROTO_SERVICE_REQUEST_TIMEOUT_MS || "20000");
+  const timeoutLabel = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 20_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutLabel);
+
+  let response: Response;
+  try {
+    response = await fetch(`${config.url}${path}`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${config.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.name === "AbortError"
+        ? `MTProto ${path} timed out after ${timeoutLabel}ms`
+        : `MTProto ${path} request failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success === false) {

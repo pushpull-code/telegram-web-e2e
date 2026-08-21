@@ -76,6 +76,7 @@ jobs:
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
+      MTPROTO_SERVICE_REQUEST_TIMEOUT_MS: ${{ vars.MTPROTO_SERVICE_REQUEST_TIMEOUT_MS || '20000' }}
       MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '1' || vars.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || '0' }}
       MTPROTO_DISCOVERY_MAX_DEPTH: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '3' || vars.MTPROTO_DISCOVERY_MAX_DEPTH || '1' }}
       MTPROTO_DISCOVERY_MAX_NODES: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '30' || vars.MTPROTO_DISCOVERY_MAX_NODES || '8' }}
