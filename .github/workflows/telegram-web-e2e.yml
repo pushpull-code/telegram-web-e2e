@@ -206,6 +206,21 @@ jobs:
         if: ${{ inputs.suite == 'generated_scenarios' }}
         run: npm run test:generated-scenarios
 
+      - name: Build generated scenario suite report
+        if: ${{ always() && inputs.suite == 'generated_scenarios' }}
+        shell: bash
+        run: |
+          if [ ! -f ".generated-scenario-suite.json" ]; then
+            echo "No generated scenario suite manifest found; skipping suite report."
+            exit 0
+          fi
+
+          mkdir -p generated-scenario-source
+          npm run scenario:report-generated-suite -- \
+            ".generated-scenario-suite.json" \
+            "test-results" \
+            "generated-scenario-source/generated-scenario-suite-report.md"
+
       - name: Run discovery tests
         if: ${{ inputs.suite == 'discover' || inputs.suite == 'all' }}
         run: npm run test:discover

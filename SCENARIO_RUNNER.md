@@ -181,6 +181,14 @@ npm run scenario:extract-generated-suite -- test-results/<run>/mtproto-discovery
 GENERATED_SCENARIO_SUITE_FILE=.generated-scenario-suite.json npm run test:generated-scenarios
 ```
 
+Build a readable batch execution report from the suite manifest and test artifacts:
+
+```bash
+npm run scenario:report-generated-suite -- .generated-scenario-suite.json test-results generated-scenario-source/generated-scenario-suite-report.md
+```
+
+This writes both `generated-scenario-suite-report.md` for humans and `generated-scenario-suite-report.json` for AI/reporting integrations. The report gives the whole suite status first, then each generated branch with purpose, safety, attempts, step statuses, screenshots, and the last visible chat tail.
+
 Batch selectors:
 
 - `safe`: observed safe drafts only; this is the default for CI.
@@ -208,6 +216,7 @@ bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | sc
 - `generated_scenario_allow_test_account`: default `false`
 
 The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json` or `scenario-suite.json`.
+For `generated_scenarios`, it also includes `generated-scenario-suite-report.md` and `.json` so the bot or a later AI pass can review the full picture, not just one failed step.
 
 The Telegram dispatch script also accepts:
 

@@ -11,6 +11,7 @@
     "test:scenario": "playwright test tests/scenario-runner.spec.ts --project=chromium",
     "scenario:extract-generated": "node scripts/extract_generated_scenario.mjs",
     "scenario:extract-generated-suite": "node scripts/extract_generated_scenario_suite.mjs",
+    "scenario:report-generated-suite": "node scripts/build_generated_scenario_suite_report.mjs",
     "test:generated-scenarios": "playwright test tests/generated-scenario-suite.spec.ts --project=chromium",
     "test:discover": "playwright test tests/discovery-runner.spec.ts --project=chromium",
     "test:discover:mtproto": "playwright test tests/mtproto-discovery.spec.ts --project=mtproto",
