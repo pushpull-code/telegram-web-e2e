@@ -1,16 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { test } from "@playwright/test";
+import { test, type ConsoleMessage, type Page, type Request } from "@playwright/test";
 import { botStartPayload, botUsername } from "./helpers/bot-config";
 import {
   buildEnrichedBotMap,
   buildQaMarkdownReport,
   normalizeNodeIdPart,
+  sanitizeReportUrl,
   type BotMap,
   type BotMapButton,
   type BotMapEdge,
   type BotMapMessage,
-  type BotMapNode
+  type BotMapNode,
+  type WebTargetAudit
 } from "./helpers/mtproto-bot-map";
 import {
   clickMtprotoButton,
@@ -29,6 +31,9 @@ const maxButtonsPerNode = Number(process.env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_N
 const stateLimit = Number(process.env.MTPROTO_DISCOVERY_STATE_LIMIT || "50");
 const settleMs = Number(process.env.MTPROTO_DISCOVERY_SETTLE_MS || "1400");
 const clickTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS || "3500");
+const webTargetsEnabled = process.env.MTPROTO_DISCOVERY_WEB_TARGETS !== "0";
+const maxUrlAudits = Number(process.env.MTPROTO_DISCOVERY_MAX_URL_AUDITS || "5");
+const webTargetTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_WEB_TARGET_TIMEOUT_MS || "20000");
 const startPayload = (process.env.MTPROTO_DISCOVERY_START_PAYLOAD || botStartPayload).trim();
 const denyButtonRe = new RegExp(
   process.env.MTPROTO_DISCOVERY_DENY_BUTTON_RE ||
@@ -187,8 +192,158 @@ function addEdge(edges: BotMapEdge[], from: string, to: string, buttonText: stri
   edges.push({ from, to, buttonText, depth });
 }
 
+type WebTarget = {
+  id: string;
+  nodeId: string;
+  path: string[];
+  buttonText: string;
+  buttonType: string;
+  url: string;
+};
+
+function collectWebTargets(map: BotMap): WebTarget[] {
+  const targets: WebTarget[] = [];
+  const seen = new Set<string>();
+
+  for (const node of map.nodes) {
+    for (const button of node.skippedButtons) {
+      if (!button.url || button.skipReason !== "url_or_webapp_terminal") {
+        continue;
+      }
+
+      const key = `${button.text.trim().toLowerCase()}|${button.url}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      targets.push({
+        id: `${node.id}__${normalizeNodeIdPart(button.text)}`,
+        nodeId: node.id,
+        path: node.path,
+        buttonText: button.text,
+        buttonType: button.type,
+        url: button.url
+      });
+    }
+  }
+
+  return targets.slice(0, maxUrlAudits);
+}
+
+function compactEventText(value: string, maxLength = 500): string {
+  const compacted = value.replace(/\s+/g, " ").trim();
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 1)}…` : compacted;
+}
+
+async function auditWebTargets(page: Page, map: BotMap, outputDir: string): Promise<WebTargetAudit[]> {
+  if (!webTargetsEnabled) {
+    return [];
+  }
+
+  const targets = collectWebTargets(map);
+  if (targets.length === 0) {
+    return [];
+  }
+
+  const screenshotDir = path.join(outputDir, "web-targets");
+  fs.mkdirSync(screenshotDir, { recursive: true });
+
+  const audits: WebTargetAudit[] = [];
+  for (const target of targets) {
+    const startedAt = Date.now();
+    const consoleMessages: WebTargetAudit["consoleMessages"] = [];
+    const failedRequests: WebTargetAudit["failedRequests"] = [];
+    const errors: string[] = [];
+    let finalUrl: string | null = null;
+    let title: string | null = null;
+    let status: number | null = null;
+    let screenshotFile: string | null = null;
+
+    const onConsole = (message: ConsoleMessage): void => {
+      if (consoleMessages.length >= 30) {
+        return;
+      }
+      consoleMessages.push({
+        type: message.type(),
+        text: compactEventText(message.text(), 700)
+      });
+    };
+    const onRequestFailed = (request: Request): void => {
+      if (failedRequests.length >= 30) {
+        return;
+      }
+      failedRequests.push({
+        method: request.method(),
+        url: sanitizeReportUrl(request.url()),
+        errorText: compactEventText(request.failure()?.errorText || "unknown_error", 300)
+      });
+    };
+    const onPageError = (error: Error): void => {
+      if (errors.length < 20) {
+        errors.push(compactEventText(error.message, 700));
+      }
+    };
+
+    page.on("console", onConsole);
+    page.on("requestfailed", onRequestFailed);
+    page.on("pageerror", onPageError);
+
+    try {
+      const response = await page.goto(target.url, {
+        waitUntil: "domcontentloaded",
+        timeout: webTargetTimeoutMs
+      });
+      status = response?.status() ?? null;
+      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+      finalUrl = sanitizeReportUrl(page.url());
+      title = await page.title().catch(() => null);
+    } catch (error) {
+      errors.push(error instanceof Error ? compactEventText(error.message, 700) : compactEventText(String(error), 700));
+      finalUrl = page.url() ? sanitizeReportUrl(page.url()) : null;
+      title = await page.title().catch(() => null);
+    }
+
+    try {
+      const screenshotPath = path.join(screenshotDir, `${target.id}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 10_000 });
+      screenshotFile = path.relative(outputDir, screenshotPath).replace(/\\/g, "/");
+    } catch (error) {
+      errors.push(
+        error instanceof Error
+          ? `screenshot failed: ${compactEventText(error.message, 500)}`
+          : `screenshot failed: ${compactEventText(String(error), 500)}`
+      );
+    } finally {
+      page.off("console", onConsole);
+      page.off("requestfailed", onRequestFailed);
+      page.off("pageerror", onPageError);
+    }
+
+    audits.push({
+      id: target.id,
+      nodeId: target.nodeId,
+      path: target.path,
+      buttonText: target.buttonText,
+      buttonType: target.buttonType,
+      url: sanitizeReportUrl(target.url),
+      finalUrl,
+      title,
+      status,
+      ok: errors.length === 0 && status !== null && status < 400,
+      durationMs: Date.now() - startedAt,
+      screenshotFile,
+      consoleMessages,
+      failedRequests,
+      errors
+    });
+  }
+
+  return audits;
+}
+
 test.describe.serial("MTProto bot discovery with branch analysis", () => {
-  test("builds raw and enriched bot maps", async ({}, testInfo) => {
+  test("builds raw and enriched bot maps", async ({ page }, testInfo) => {
     test.skip(!isMtprotoConfigured(), "MTPROTO_SERVICE_URL/MTPROTO_SERVICE_TOKEN are not configured.");
     test.setTimeout(12 * 60_000);
 
@@ -245,7 +400,11 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     const rawPath = path.join(outputDir, "bot-map.json");
     fs.writeFileSync(rawPath, JSON.stringify(map, null, 2), "utf8");
 
-    const enriched = await buildEnrichedBotMap(map);
+    const webTargetAudits = await auditWebTargets(page, map, outputDir);
+    const webTargetAuditsPath = path.join(outputDir, "web-target-audits.json");
+    fs.writeFileSync(webTargetAuditsPath, JSON.stringify(webTargetAudits, null, 2), "utf8");
+
+    const enriched = await buildEnrichedBotMap(map, webTargetAudits);
     const enrichedPath = path.join(outputDir, "bot-map.enriched.json");
     fs.writeFileSync(enrichedPath, JSON.stringify(enriched, null, 2), "utf8");
 
@@ -258,6 +417,10 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     });
     await testInfo.attach("mtproto-bot-map-enriched", {
       path: enrichedPath,
+      contentType: "application/json"
+    });
+    await testInfo.attach("mtproto-web-target-audits", {
+      path: webTargetAuditsPath,
       contentType: "application/json"
     });
     await testInfo.attach("mtproto-qa-report", {

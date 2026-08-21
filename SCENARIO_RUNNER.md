@@ -132,18 +132,24 @@ Discovery controls:
 - `MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE` default `8`
 - `MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS` default `3500`
 - `MTPROTO_DISCOVERY_DENY_BUTTON_RE` for buttons that must not be clicked
+- `MTPROTO_DISCOVERY_WEB_TARGETS=0` to disable URL/WebApp checks
+- `MTPROTO_DISCOVERY_MAX_URL_AUDITS` default `5`
+- `MTPROTO_DISCOVERY_WEB_TARGET_TIMEOUT_MS` default `20000`
 
 Artifacts:
 
 ```text
 test-results/<run>/mtproto-discovery/bot-map.json
 test-results/<run>/mtproto-discovery/bot-map.enriched.json
+test-results/<run>/mtproto-discovery/web-target-audits.json
+test-results/<run>/mtproto-discovery/web-targets/*.png
 test-results/<run>/mtproto-discovery/qa-report.md
 ```
 
 `bot-map.enriched.json` contains per-node purpose, expected behavior, risks, suggested tests, branch analysis, product summary, and optional staged AI review.
 When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, branch-by-branch analysis, scenario plan, defects, coverage gaps, product questions, next-run recommendation, and short Telegram summary.
 `qa-report.md` is the readable report built from the staged AI output, with heuristic fallback when AI is disabled or returns an invalid shape.
+URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
 
 ## GitHub Actions
 

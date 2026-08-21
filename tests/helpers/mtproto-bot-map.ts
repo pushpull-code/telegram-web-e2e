@@ -78,6 +78,31 @@ export type ProductSummary = {
   recommendedNextSteps: string[];
 };
 
+export type WebTargetAudit = {
+  id: string;
+  nodeId: string;
+  path: string[];
+  buttonText: string;
+  buttonType: string;
+  url: string;
+  finalUrl: string | null;
+  title: string | null;
+  status: number | null;
+  ok: boolean;
+  durationMs: number;
+  screenshotFile: string | null;
+  consoleMessages: Array<{
+    type: string;
+    text: string;
+  }>;
+  failedRequests: Array<{
+    method: string;
+    url: string;
+    errorText: string;
+  }>;
+  errors: string[];
+};
+
 export type AiSeverity = "low" | "medium" | "high" | "critical";
 export type AiConfidence = "low" | "medium" | "high";
 
@@ -154,6 +179,7 @@ export type AiReview = {
 };
 
 export type EnrichedBotMap = BotMap & {
+  webTargetAudits?: WebTargetAudit[];
   enrichment: HeuristicEnrichment & {
     ai: AiReview;
   };
@@ -241,6 +267,15 @@ function normalizeText(value: string): string {
 
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+export function sanitizeReportUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}${url.search ? "?…" : ""}${url.hash ? "#…" : ""}`;
+  } catch {
+    return compactText(value, 180);
+  }
 }
 
 function nodeText(node: BotMapNode): string {
@@ -503,7 +538,11 @@ function isAiQaReport(value: unknown): value is AiQaReport {
   );
 }
 
-function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
+function compactMapForAi(
+  map: BotMap,
+  heuristic: HeuristicEnrichment,
+  webTargetAudits: WebTargetAudit[] = []
+): unknown {
   const terminalUrlButtons = map.nodes.flatMap((node) =>
     node.skippedButtons
       .filter((button) => button.skipReason === "url_or_webapp_terminal")
@@ -511,7 +550,8 @@ function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
         nodeId: node.id,
         path: node.path,
         text: button.text,
-        type: button.type
+        type: button.type,
+        url: button.url ? sanitizeReportUrl(button.url) : null
       }))
   );
   const safeDeniedButtons = map.nodes.flatMap((node) =>
@@ -562,11 +602,32 @@ function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
     edges: map.edges,
     terminalUrlButtons,
     safeDeniedButtons,
+    webTargetAudits: webTargetAudits.map((audit) => ({
+      id: audit.id,
+      nodeId: audit.nodeId,
+      path: audit.path,
+      buttonText: audit.buttonText,
+      buttonType: audit.buttonType,
+      url: audit.url,
+      finalUrl: audit.finalUrl,
+      title: audit.title,
+      status: audit.status,
+      ok: audit.ok,
+      durationMs: audit.durationMs,
+      screenshotFile: audit.screenshotFile,
+      consoleMessages: audit.consoleMessages,
+      failedRequests: audit.failedRequests,
+      errors: audit.errors
+    })),
     heuristicProductSummary: heuristic.productSummary
   };
 }
 
-function buildAiQaPrompt(map: BotMap, heuristic: HeuristicEnrichment): string {
+function buildAiQaPrompt(
+  map: BotMap,
+  heuristic: HeuristicEnrichment,
+  webTargetAudits: WebTargetAudit[] = []
+): string {
   return [
     "Ты senior QA architect для Telegram-ботов, Telegram Mini Apps и backend-integrated flows.",
     "Нужно сделать staged QA analysis по карте бота.",
@@ -634,11 +695,15 @@ function buildAiQaPrompt(map: BotMap, heuristic: HeuristicEnrichment): string {
     "}",
     "",
     "Карта бота:",
-    JSON.stringify(compactMapForAi(map, heuristic))
+    JSON.stringify(compactMapForAi(map, heuristic, webTargetAudits))
   ].join("\n");
 }
 
-export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichment): Promise<AiReview> {
+export async function requestAiReview(
+  map: BotMap,
+  heuristic: HeuristicEnrichment,
+  webTargetAudits: WebTargetAudit[] = []
+): Promise<AiReview> {
   const apiKey = (process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "").trim();
   const provider = (process.env.AI_PROVIDER || "openai-compatible").trim();
   const model = (process.env.AI_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini").trim();
@@ -655,7 +720,7 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
     };
   }
 
-  const prompt = buildAiQaPrompt(map, heuristic);
+  const prompt = buildAiQaPrompt(map, heuristic, webTargetAudits);
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -747,6 +812,38 @@ export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
     ""
   ];
 
+  if (enriched.webTargetAudits?.length) {
+    lines.push("## Web/URL checks", "");
+    for (const audit of enriched.webTargetAudits) {
+      lines.push(
+        `### ${audit.id} (${audit.ok ? "ok" : "failed"})`,
+        `Path: ${audit.path.join(" > ") || "/start"}`,
+        `Button: ${audit.buttonText}`,
+        `URL: ${audit.url}`,
+        `Final URL: ${audit.finalUrl || "-"}`,
+        `Status: ${audit.status ?? "-"}`,
+        `Title: ${audit.title || "-"}`,
+        `Screenshot: ${audit.screenshotFile || "-"}`,
+        "",
+        "Console:",
+        ...markdownList(
+          audit.consoleMessages.map((message) => `${message.type}: ${message.text}`),
+          "нет сообщений"
+        ),
+        "",
+        "Failed requests:",
+        ...markdownList(
+          audit.failedRequests.map((request) => `${request.method} ${request.url}: ${request.errorText}`),
+          "нет failed requests"
+        ),
+        "",
+        "Errors:",
+        ...markdownList(audit.errors, "нет ошибок"),
+        ""
+      );
+    }
+  }
+
   if (report) {
     lines.push("## Overall view", "", report.botOverview.summary, "");
     lines.push("### Business purpose", "", report.botOverview.businessPurpose, "");
@@ -834,17 +931,21 @@ export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
   return `${lines.join("\n")}\n`;
 }
 
-export async function buildEnrichedBotMap(map: BotMap): Promise<EnrichedBotMap> {
+export async function buildEnrichedBotMap(
+  map: BotMap,
+  webTargetAudits: WebTargetAudit[] = []
+): Promise<EnrichedBotMap> {
   const heuristic = buildHeuristicEnrichment(map);
   const ai = process.env.MTPROTO_DISCOVERY_AI === "0" ? {
     enabled: false,
     provider: "disabled",
     model: "",
     error: "MTPROTO_DISCOVERY_AI=0"
-  } : await requestAiReview(map, heuristic);
+  } : await requestAiReview(map, heuristic, webTargetAudits);
 
   return {
     ...map,
+    ...(webTargetAudits.length > 0 ? { webTargetAudits } : {}),
     enrichment: {
       ...heuristic,
       ai
