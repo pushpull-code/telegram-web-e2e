@@ -78,6 +78,10 @@ function expandEnv(value: unknown): unknown {
   return value;
 }
 
+export function expandScenarioEnv<T>(value: T): T {
+  return expandEnv(value) as T;
+}
+
 function assertScenario(value: unknown): asserts value is ScenarioDefinition {
   if (!value || typeof value !== "object") {
     throw new Error("Scenario file must contain a JSON object.");

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "@playwright/test";
-import { runScenario, type ScenarioDefinition } from "./helpers/scenario-runner";
+import { expandScenarioEnv, runScenario, type ScenarioDefinition } from "./helpers/scenario-runner";
 
 type GeneratedScenarioSuiteDraft = {
   id: string;
@@ -59,8 +59,9 @@ function assertGeneratedScenarioSuite(value: unknown): asserts value is Generate
 function loadGeneratedScenarioSuite(): GeneratedScenarioSuite {
   const suitePath = resolveSuitePath(process.env.GENERATED_SCENARIO_SUITE_FILE || ".generated-scenario-suite.json");
   const parsed = JSON.parse(fs.readFileSync(suitePath, "utf8")) as unknown;
-  assertGeneratedScenarioSuite(parsed);
-  return parsed;
+  const expanded = expandScenarioEnv(parsed);
+  assertGeneratedScenarioSuite(expanded);
+  return expanded;
 }
 
 const suite = loadGeneratedScenarioSuite();
