@@ -69,6 +69,10 @@ function parseRunCommand(text) {
   };
 }
 
+function isDevGeneratedSelector(selector) {
+  return ["dev", "unsafe", "runnable"].includes(String(selector || "").trim().toLowerCase());
+}
+
 async function tgGet(path, searchParams = {}) {
   const query = new URLSearchParams(searchParams).toString();
   const url = `${tgApiBase}/${path}${query ? `?${query}` : ""}`;
@@ -123,6 +127,10 @@ async function triggerWorkflow(suite, options = {}) {
   }
   if (suite === "generated_scenarios" && options.generatedScenarioDrafts) {
     inputs.generated_scenario_drafts = options.generatedScenarioDrafts;
+    if (isDevGeneratedSelector(options.generatedScenarioDrafts)) {
+      inputs.generated_scenario_allow_test_account = "true";
+      inputs.generated_scenario_max_drafts = "20";
+    }
   }
 
   const dispatchResponse = await fetch(

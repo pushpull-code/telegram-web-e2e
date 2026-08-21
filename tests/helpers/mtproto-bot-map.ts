@@ -1353,6 +1353,9 @@ const MANUAL_BUTTON_RE =
   /delete|remove|withdraw|pay|buy|purchase|order|submit|confirm|cancel|logout|sign out|удал|вывод|оплат|купить|заказ|отправ|подтверд|отмен|выйти|land ändern|change country|country|страна|andorra|germany|deutschland|united states|usa/i;
 const TEST_ACCOUNT_BUTTON_RE = /join|beitreten|task|задан|готов|ready|start|начать|присоедин/i;
 const FLAG_EMOJI_RE = /[\u{1F1E6}-\u{1F1FF}]/u;
+const ALLOW_UNSAFE_BUTTON_SCENARIOS = /^(1|true|yes)$/i.test(
+  process.env.GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS || process.env.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || ""
+);
 
 function botExpression(bot: string): string {
   return `\${BOT_USERNAME:-${bot.replace(/^@/, "")}}`;
@@ -1496,6 +1499,14 @@ function commandDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDra
 
 function buttonLabelSafety(label: string): Pick<GeneratedExecutableScenarioDraft, "safety" | "runnableNow" | "blocker"> {
   if (FLAG_EMOJI_RE.test(label) || MANUAL_BUTTON_RE.test(label)) {
+    if (ALLOW_UNSAFE_BUTTON_SCENARIOS) {
+      return {
+        safety: "test-account",
+        runnableNow: true,
+        blocker: null
+      };
+    }
+
     return {
       safety: "manual",
       runnableNow: false,
@@ -1695,6 +1706,7 @@ export function buildGeneratedExecutableScenarioBundle(enriched: EnrichedBotMap)
       "Discovery does not auto-run these drafts.",
       "Use only drafts with runnableNow=true as SCENARIO_FILE after review.",
       "test-account drafts can mutate task assignment or onboarding state; run them only on a dedicated QA Telegram account.",
+      "GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS=1 converts manual state-changing buttons into runnable test-account drafts for dev bots.",
       "manual drafts intentionally have no scenario object until a human approves the risk boundary."
     ]
   };

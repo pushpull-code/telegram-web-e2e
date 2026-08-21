@@ -20,7 +20,7 @@ on:
         required: false
         default: 'false'
       generated_scenario_drafts:
-        description: 'Selector for generated_scenarios suite: safe | all-safe | runnable | comma-separated draft ids'
+        description: 'Selector for generated_scenarios suite: safe | all-safe | runnable | dev | comma-separated draft ids'
         required: false
         default: 'safe'
       generated_scenario_max_drafts:
@@ -70,13 +70,15 @@ jobs:
       SCENARIO_FILE: ${{ inputs.scenario_file }}
       GENERATED_SCENARIO_DRAFT: ${{ inputs.generated_scenario_draft }}
       GENERATED_SCENARIO_DRAFTS: ${{ inputs.generated_scenario_drafts }}
-      GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT: ${{ inputs.generated_scenario_allow_test_account }}
-      GENERATED_SCENARIO_MAX_DRAFTS: ${{ inputs.generated_scenario_max_drafts }}
+      GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT: ${{ (inputs.generated_scenario_allow_test_account == 'true' || inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe' || inputs.generated_scenario_drafts == 'runnable') && '1' || '0' }}
+      GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '1' || vars.GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS || '0' }}
+      GENERATED_SCENARIO_MAX_DRAFTS: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '20' || inputs.generated_scenario_max_drafts }}
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
-      MTPROTO_DISCOVERY_MAX_DEPTH: ${{ vars.MTPROTO_DISCOVERY_MAX_DEPTH || '1' }}
-      MTPROTO_DISCOVERY_MAX_NODES: ${{ vars.MTPROTO_DISCOVERY_MAX_NODES || '8' }}
+      MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '1' || vars.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || '0' }}
+      MTPROTO_DISCOVERY_MAX_DEPTH: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '3' || vars.MTPROTO_DISCOVERY_MAX_DEPTH || '1' }}
+      MTPROTO_DISCOVERY_MAX_NODES: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '30' || vars.MTPROTO_DISCOVERY_MAX_NODES || '8' }}
       MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS: ${{ vars.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS || '3500' }}
       MTPROTO_DISCOVERY_WEB_TARGETS: ${{ vars.MTPROTO_DISCOVERY_WEB_TARGETS || '1' }}
       MTPROTO_DISCOVERY_MAX_URL_AUDITS: ${{ vars.MTPROTO_DISCOVERY_MAX_URL_AUDITS || '5' }}

@@ -14,10 +14,12 @@ function usage() {
     "  safe                 runnable safe drafts with observed evidence only",
     "  all-safe             all runnable safe drafts",
     "  runnable             safe drafts plus test-account drafts when explicitly allowed",
+    "  dev                  all executable drafts for a dedicated dev/test bot",
     "  draft-a,draft-b      explicit draft ids",
     "",
     "Environment:",
     "  GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1 allows drafts marked safety=test-account",
+    "  GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS=1 allows generated manual button paths to become executable before extraction",
     "  GENERATED_SCENARIO_MAX_DRAFTS=4 limits selected drafts"
   ].join("\n");
 }
@@ -132,6 +134,8 @@ function buildCoverage(drafts, selectedBeforeLimit, selectedAfterLimit, selector
 function selectDrafts(bundle, selector, allowTestAccount) {
   const drafts = bundle.drafts.filter(Boolean);
   const normalized = (selector || "safe").trim();
+  const devMode = normalized === "dev" || normalized === "unsafe";
+  const canRunTestAccount = allowTestAccount || devMode;
 
   if (!normalized || normalized === "safe") {
     return drafts.filter(isObservedSafeDraft);
@@ -145,8 +149,12 @@ function selectDrafts(bundle, selector, allowTestAccount) {
     return drafts.filter(
       (draft) =>
         isExecutableDraft(draft) &&
-        (draft.safety === "safe" || (draft.safety === "test-account" && allowTestAccount))
+        (draft.safety === "safe" || (draft.safety === "test-account" && canRunTestAccount))
     );
+  }
+
+  if (devMode) {
+    return drafts.filter((draft) => isExecutableDraft(draft));
   }
 
   const explicitIds = normalized
@@ -169,13 +177,14 @@ if (!sourcePathInput || !outputPathInput) {
 const sourcePath = path.resolve(sourcePathInput);
 const outputPath = path.resolve(outputPathInput);
 const allowTestAccount = /^(1|true|yes)$/i.test(process.env.GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT || "");
+const effectiveAllowTestAccount = allowTestAccount || selectorInput === "dev" || selectorInput === "unsafe";
 const maxDrafts = Math.max(1, Number(process.env.GENERATED_SCENARIO_MAX_DRAFTS || "4"));
 
 const bundle = readJson(sourcePath);
 assertDraftBundle(bundle);
 
 const drafts = bundle.drafts.filter(Boolean);
-const selectedBeforeLimit = uniqueDrafts(selectDrafts(bundle, selectorInput, allowTestAccount));
+const selectedBeforeLimit = uniqueDrafts(selectDrafts(bundle, selectorInput, effectiveAllowTestAccount));
 const selected = selectedBeforeLimit.slice(0, maxDrafts);
 if (selected.length === 0) {
   fail(`No executable drafts selected by selector: ${selectorInput || "safe"}`);
@@ -194,7 +203,7 @@ const suite = {
     aiEnabled: bundle.source?.aiEnabled ?? null,
     aiModel: bundle.source?.aiModel ?? null
   },
-  coverage: buildCoverage(drafts, selectedBeforeLimit, selected, selectorInput, maxDrafts, allowTestAccount),
+  coverage: buildCoverage(drafts, selectedBeforeLimit, selected, selectorInput, maxDrafts, effectiveAllowTestAccount),
   drafts: selected.map((draft) => ({
     id: draft.id,
     safety: draft.safety,

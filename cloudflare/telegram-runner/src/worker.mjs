@@ -105,6 +105,10 @@ function scenarioKeyForRun(suite, selector) {
   return suite === "autorun" ? SCENARIO_START_FINISH : suite;
 }
 
+function isDevGeneratedSelector(selector) {
+  return ["dev", "unsafe", "runnable"].includes(String(selector || "").trim().toLowerCase());
+}
+
 function parseRunText(text, stateLang, defaultSuite) {
   const normalized = stripCommandMention(text);
   const parts = normalized.split(/\s+/).filter(Boolean);
@@ -507,6 +511,10 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey, suite, genera
   }
   if (runSuite === "generated_scenarios" && generatedScenarioDrafts) {
     dispatchBody.inputs.generated_scenario_drafts = String(generatedScenarioDrafts);
+    if (isDevGeneratedSelector(generatedScenarioDrafts)) {
+      dispatchBody.inputs.generated_scenario_allow_test_account = "true";
+      dispatchBody.inputs.generated_scenario_max_drafts = String(env.GENERATED_SCENARIO_DEV_MAX_DRAFTS || "20");
+    }
   }
 
   const dispatchResponse = await fetch(

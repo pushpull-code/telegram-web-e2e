@@ -87,7 +87,9 @@ For `generated_scenarios`, the worker adds a short branch-check block to the Tel
 /run en
 /run generated_scenarios
 /run generated_scenarios safe
+/run generated_scenarios dev
 /run generated_scenario start-smoke
 ```
 
 Selectors are accepted only for `generated_scenario` and `generated_scenarios`.
+Use `dev` only for a dedicated dev/test bot: it clicks state-changing inline buttons and includes test-account branches.

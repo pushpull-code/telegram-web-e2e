@@ -37,6 +37,7 @@ const maxButtonsPerNode = Number(process.env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_N
 const stateLimit = Number(process.env.MTPROTO_DISCOVERY_STATE_LIMIT || "50");
 const settleMs = Number(process.env.MTPROTO_DISCOVERY_SETTLE_MS || "1400");
 const clickTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS || "3500");
+const allowUnsafeButtons = /^(1|true|yes)$/i.test(process.env.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || "");
 const webTargetsEnabled = process.env.MTPROTO_DISCOVERY_WEB_TARGETS !== "0";
 const maxUrlAudits = Number(process.env.MTPROTO_DISCOVERY_MAX_URL_AUDITS || "5");
 const webTargetTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_WEB_TARGET_TIMEOUT_MS || "20000");
@@ -81,7 +82,7 @@ function buttonSkipReason(button: MtprotoButton): string | null {
   if (button.url) {
     return "url_or_webapp_terminal";
   }
-  if (denyButtonRe.test(button.text)) {
+  if (!allowUnsafeButtons && denyButtonRe.test(button.text)) {
     return "safe_deny_rule";
   }
   return null;
