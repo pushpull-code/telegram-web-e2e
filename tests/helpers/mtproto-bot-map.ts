@@ -1446,12 +1446,7 @@ function fullMapText(enriched: EnrichedBotMap): string {
       ...node.tail.map((message) => message.text),
       ...node.buttons.map((button) => button.text),
       ...node.skippedButtons.map((button) => button.text)
-    ]),
-    ...(enriched.enrichment.ai.report?.scenarioPlan.flatMap((scenario) => [
-      scenario.name,
-      scenario.why,
-      ...scenario.steps
-    ]) || [])
+    ])
   ].join("\n");
 }
 
