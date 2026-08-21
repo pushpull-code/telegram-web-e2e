@@ -193,6 +193,25 @@ function countByStatus(draftResults, status) {
   return draftResults.filter((draft) => draft.status === status).length;
 }
 
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function existingSourceArtifacts(sourceDirs) {
+  return [
+    "scenario-suite.json",
+    "generated-scenarios.json",
+    "generated-test-plan.json",
+    "qa-report.md",
+    "telegram-summary.txt",
+    "web-target-audits.json",
+    "bot-map.enriched.json",
+    "bot-map.json"
+  ].filter((artifact) =>
+    sourceDirs.some((sourceDir) => fs.existsSync(path.join(sourceDir, artifact)))
+  );
+}
+
 function buildMarkdown(payload) {
   const lines = [
     "# Generated Scenario Suite Report",
@@ -284,17 +303,7 @@ assertSuite(suite);
 
 const reportsByScenario = buildReportIndex(resultsDir, outputDir);
 const draftResults = buildDraftResults(suite, reportsByScenario);
-const sourceDir = path.dirname(suitePath);
-const sourceArtifacts = [
-  "scenario-suite.json",
-  "generated-scenarios.json",
-  "generated-test-plan.json",
-  "qa-report.md",
-  "telegram-summary.txt",
-  "web-target-audits.json",
-  "bot-map.enriched.json",
-  "bot-map.json"
-].filter((artifact) => fs.existsSync(path.join(sourceDir, artifact)));
+const sourceArtifacts = existingSourceArtifacts(uniqueValues([path.dirname(suitePath), outputDir]));
 
 const payload = {
   schemaVersion: 1,
