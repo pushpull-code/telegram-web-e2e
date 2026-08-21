@@ -4,7 +4,9 @@ import { test, type ConsoleMessage, type Page, type Request } from "@playwright/
 import { botStartPayload, botUsername } from "./helpers/bot-config";
 import {
   buildEnrichedBotMap,
+  buildGeneratedQaPlan,
   buildQaMarkdownReport,
+  buildTelegramSummaryText,
   normalizeNodeIdPart,
   sanitizeReportUrl,
   type BotMap,
@@ -704,6 +706,12 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     const qaReportPath = path.join(outputDir, "qa-report.md");
     fs.writeFileSync(qaReportPath, buildQaMarkdownReport(enriched), "utf8");
 
+    const telegramSummaryPath = path.join(outputDir, "telegram-summary.txt");
+    fs.writeFileSync(telegramSummaryPath, buildTelegramSummaryText(enriched), "utf8");
+
+    const generatedPlanPath = path.join(outputDir, "generated-test-plan.json");
+    fs.writeFileSync(generatedPlanPath, JSON.stringify(buildGeneratedQaPlan(enriched), null, 2), "utf8");
+
     await testInfo.attach("mtproto-bot-map", {
       path: rawPath,
       contentType: "application/json"
@@ -719,6 +727,14 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     await testInfo.attach("mtproto-qa-report", {
       path: qaReportPath,
       contentType: "text/markdown"
+    });
+    await testInfo.attach("mtproto-telegram-summary", {
+      path: telegramSummaryPath,
+      contentType: "text/plain"
+    });
+    await testInfo.attach("mtproto-generated-test-plan", {
+      path: generatedPlanPath,
+      contentType: "application/json"
     });
   });
 });

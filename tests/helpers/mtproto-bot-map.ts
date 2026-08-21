@@ -205,6 +205,53 @@ export type AiQaReport = {
   telegramSummary: string[];
 };
 
+export type GeneratedQaPlan = {
+  schemaVersion: 1;
+  generatedAtIso: string;
+  bot: string;
+  startPayload: string;
+  source: {
+    runner: BotMap["runner"];
+    aiEnabled: boolean;
+    aiModel: string;
+    aiPromptVersion: string | null;
+    nodeCount: number;
+    edgeCount: number;
+    webTargetAuditCount: number;
+  };
+  scenarios: Array<{
+    name: string;
+    priority: AiSeverity;
+    why: string;
+    steps: string[];
+    evidence: string[];
+    runnableNow: boolean;
+    blocker: string | null;
+  }>;
+  branchChecklist: Array<{
+    nodeId: string;
+    path: string[];
+    priority: AiSeverity;
+    checks: string[];
+    missingEvidence: string[];
+  }>;
+  defects: AiQaReport["defects"];
+  coverageGaps: string[];
+  questionsForProduct: string[];
+  webTargets: Array<{
+    id: string;
+    status: number | null;
+    ok: boolean;
+    title: string | null;
+    url: string;
+    finalUrl: string | null;
+    screenshotFile: string | null;
+    pageCounts: WebPageSnapshot["counts"] | null;
+    suggestedInteractions: string[];
+  }>;
+  nextRun: AiQaReport["nextRun"] | null;
+};
+
 export type HeuristicEnrichment = {
   mode: "heuristic";
   generatedAtIso: string;
@@ -894,47 +941,47 @@ export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
         `Status: ${audit.status ?? "-"}`,
         `Title: ${audit.title || "-"}`,
         `Screenshot: ${audit.screenshotFile || "-"}`,
-          "",
-          "Page snapshot:",
-          ...(audit.pageSnapshot
-            ? [
-                `- headings: ${audit.pageSnapshot.counts.headings}`,
-                `- links: ${audit.pageSnapshot.counts.links}`,
-                `- buttons: ${audit.pageSnapshot.counts.buttons}`,
-                `- inputs: ${audit.pageSnapshot.counts.inputs}`,
-                `- forms: ${audit.pageSnapshot.counts.forms}`,
-                ...markdownList(
-                  audit.pageSnapshot.headings.map((heading) => `heading: ${heading}`),
-                  "нет headings"
-                ),
-                ...markdownList(
-                  audit.pageSnapshot.elements
-                    .slice(0, 12)
-                    .map((element) =>
-                      `${element.kind}: ${element.text || element.placeholder || element.href || element.tagName}`
-                    ),
-                  "нет visible elements"
-                )
-              ]
-            : ["- snapshot не собран"]),
-          "",
-          "Suggested interactions:",
-          ...markdownList(audit.suggestedInteractions, "нет suggested interactions"),
-          "",
-          "Safe interactions:",
-          ...markdownList(
-            audit.interactions.map(
-              (interaction) =>
-                `${interaction.ok ? "ok" : "failed"} click ${interaction.targetKind} "${interaction.targetText}" -> ${
-                  interaction.afterUrl || "-"
-                }`
-            ),
-            "не запускались"
+        "",
+        "Page snapshot:",
+        ...(audit.pageSnapshot
+          ? [
+              `- headings: ${audit.pageSnapshot.counts.headings}`,
+              `- links: ${audit.pageSnapshot.counts.links}`,
+              `- buttons: ${audit.pageSnapshot.counts.buttons}`,
+              `- inputs: ${audit.pageSnapshot.counts.inputs}`,
+              `- forms: ${audit.pageSnapshot.counts.forms}`,
+              ...markdownList(
+                audit.pageSnapshot.headings.map((heading) => `heading: ${heading}`),
+                "нет headings"
+              ),
+              ...markdownList(
+                audit.pageSnapshot.elements
+                  .slice(0, 12)
+                  .map((element) =>
+                    `${element.kind}: ${element.text || element.placeholder || element.href || element.tagName}`
+                  ),
+                "нет visible elements"
+              )
+            ]
+          : ["- snapshot не собран"]),
+        "",
+        "Suggested interactions:",
+        ...markdownList(audit.suggestedInteractions, "нет suggested interactions"),
+        "",
+        "Safe interactions:",
+        ...markdownList(
+          audit.interactions.map(
+            (interaction) =>
+              `${interaction.ok ? "ok" : "failed"} click ${interaction.targetKind} "${interaction.targetText}" -> ${
+                interaction.afterUrl || "-"
+              }`
           ),
-          "",
-          "Console:",
-          ...markdownList(
-            audit.consoleMessages.map((message) => `${message.type}: ${message.text}`),
+          "не запускались"
+        ),
+        "",
+        "Console:",
+        ...markdownList(
+          audit.consoleMessages.map((message) => `${message.type}: ${message.text}`),
           "нет сообщений"
         ),
         "",
@@ -1036,6 +1083,115 @@ export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+function heuristicPriorityToSeverity(priority: NodeAnalysis["nextStepPriority"]): AiSeverity {
+  if (priority === "high") {
+    return "high";
+  }
+  if (priority === "medium") {
+    return "medium";
+  }
+  return "low";
+}
+
+export function buildTelegramSummaryText(enriched: EnrichedBotMap): string {
+  const report = enriched.enrichment.ai.report;
+  const lines = [`QA @${enriched.bot}`];
+
+  if (report?.telegramSummary.length) {
+    lines.push(...report.telegramSummary.map((line) => `- ${line}`));
+  } else {
+    lines.push(`- ${enriched.enrichment.productSummary.overview}`);
+    lines.push(
+      ...enriched.enrichment.productSummary.criticalRisks
+        .slice(0, 4)
+        .map((risk) => `- риск: ${risk}`)
+    );
+    if (enriched.enrichment.ai.error || enriched.enrichment.ai.parseError) {
+      lines.push(`- AI: ${enriched.enrichment.ai.error || enriched.enrichment.ai.parseError}`);
+    }
+  }
+
+  if (enriched.webTargetAudits?.length) {
+    const okCount = enriched.webTargetAudits.filter((audit) => audit.ok).length;
+    lines.push(`- web/url: ${okCount}/${enriched.webTargetAudits.length} открылись, snapshots собраны`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function buildGeneratedQaPlan(enriched: EnrichedBotMap): GeneratedQaPlan {
+  const report = enriched.enrichment.ai.report;
+  const heuristic = enriched.enrichment;
+
+  return {
+    schemaVersion: 1,
+    generatedAtIso: new Date().toISOString(),
+    bot: enriched.bot,
+    startPayload: enriched.startPayload,
+    source: {
+      runner: enriched.runner,
+      aiEnabled: enriched.enrichment.ai.enabled,
+      aiModel: enriched.enrichment.ai.model,
+      aiPromptVersion: enriched.enrichment.ai.promptVersion || null,
+      nodeCount: enriched.nodes.length,
+      edgeCount: enriched.edges.length,
+      webTargetAuditCount: enriched.webTargetAudits?.length || 0
+    },
+    scenarios: report
+      ? report.scenarioPlan.map((scenario) => ({
+          name: scenario.name,
+          priority: scenario.priority,
+          why: scenario.why,
+          steps: scenario.steps,
+          evidence: scenario.evidence,
+          runnableNow: false,
+          blocker: "AI test plan is not yet converted to executable scenario JSON."
+        }))
+      : heuristic.branchAnalysis.map((branch) => ({
+          name: `branch_${branch.nodeId}`,
+          priority: branch.criticality,
+          why: branch.purpose,
+          steps: branch.suggestedChecks,
+          evidence: ["bot-map.json", "bot-map.enriched.json", "qa-report.md"],
+          runnableNow: false,
+          blocker: "Heuristic plan needs AI review or explicit scenario mapping."
+        })),
+    branchChecklist: report
+      ? report.branchReviews.map((branch) => ({
+          nodeId: branch.nodeId,
+          path: branch.path,
+          priority: branch.severity,
+          checks: branch.tests,
+          missingEvidence: branch.missingEvidence
+        }))
+      : enriched.nodes.map((node) => {
+          const analysis = heuristic.nodeAnalysis[node.id];
+          return {
+            nodeId: node.id,
+            path: node.path,
+            priority: heuristicPriorityToSeverity(analysis.nextStepPriority),
+            checks: analysis.suggestedTests,
+            missingEvidence: node.error ? [node.error] : []
+          };
+        }),
+    defects: report?.defects || [],
+    coverageGaps: report?.coverageGaps || heuristic.productSummary.criticalRisks,
+    questionsForProduct: report?.questionsForProduct || [],
+    webTargets: (enriched.webTargetAudits || []).map((audit) => ({
+      id: audit.id,
+      status: audit.status,
+      ok: audit.ok,
+      title: audit.title,
+      url: audit.url,
+      finalUrl: audit.finalUrl,
+      screenshotFile: audit.screenshotFile,
+      pageCounts: audit.pageSnapshot?.counts || null,
+      suggestedInteractions: audit.suggestedInteractions
+    })),
+    nextRun: report?.nextRun || null
+  };
 }
 
 export async function buildEnrichedBotMap(
