@@ -78,6 +78,60 @@ export type ProductSummary = {
   recommendedNextSteps: string[];
 };
 
+export type AiSeverity = "low" | "medium" | "high" | "critical";
+export type AiConfidence = "low" | "medium" | "high";
+
+export type AiQaReport = {
+  schemaVersion: 2;
+  analysisMode: "staged-telegram-bot-qa";
+  botOverview: {
+    summary: string;
+    businessPurpose: string;
+    knownScope: string[];
+    mainFlows: string[];
+    safetyBoundaries: string[];
+    confidence: AiConfidence;
+  };
+  branchReviews: Array<{
+    nodeId: string;
+    path: string[];
+    currentEvidence: string[];
+    inferredPurpose: string;
+    expectedBehavior: string[];
+    observedBehavior: string[];
+    risks: string[];
+    tests: string[];
+    missingEvidence: string[];
+    severity: AiSeverity;
+    confidence: AiConfidence;
+  }>;
+  scenarioPlan: Array<{
+    name: string;
+    why: string;
+    priority: AiSeverity;
+    steps: string[];
+    evidence: string[];
+  }>;
+  defects: Array<{
+    title: string;
+    nodeIds: string[];
+    evidence: string[];
+    whyItMatters: string;
+    severity: AiSeverity;
+    reproSteps: string[];
+    neededEvidence: string[];
+  }>;
+  coverageGaps: string[];
+  questionsForProduct: string[];
+  nextRun: {
+    recommendedDepth: number;
+    recommendedMaxNodes: number;
+    focusBranches: string[];
+    webAppChecks: string[];
+  };
+  telegramSummary: string[];
+};
+
 export type HeuristicEnrichment = {
   mode: "heuristic";
   generatedAtIso: string;
@@ -90,8 +144,12 @@ export type AiReview = {
   enabled: boolean;
   provider: string;
   model: string;
+  schemaVersion?: 2;
+  promptVersion?: string;
+  report?: AiQaReport;
   parsed?: unknown;
   rawText?: string;
+  parseError?: string;
   error?: string;
 };
 
@@ -165,6 +223,8 @@ const STATE_KEYWORDS: Array<{
     priority: "medium"
   }
 ];
+
+const AI_PROMPT_VERSION = "telegram-bot-qa-v2";
 
 function compactText(value: string, maxLength = 500): string {
   const compacted = value.replace(/\s+/g, " ").trim();
@@ -356,15 +416,131 @@ function tryParseJson(text: string): unknown | null {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isSeverity(value: unknown): value is AiSeverity {
+  return value === "low" || value === "medium" || value === "high" || value === "critical";
+}
+
+function isConfidence(value: unknown): value is AiConfidence {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function isAiQaBranchReview(value: unknown): value is AiQaReport["branchReviews"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.nodeId === "string" &&
+    isStringArray(value.path) &&
+    isStringArray(value.currentEvidence) &&
+    typeof value.inferredPurpose === "string" &&
+    isStringArray(value.expectedBehavior) &&
+    isStringArray(value.observedBehavior) &&
+    isStringArray(value.risks) &&
+    isStringArray(value.tests) &&
+    isStringArray(value.missingEvidence) &&
+    isSeverity(value.severity) &&
+    isConfidence(value.confidence)
+  );
+}
+
+function isAiQaScenario(value: unknown): value is AiQaReport["scenarioPlan"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.why === "string" &&
+    isSeverity(value.priority) &&
+    isStringArray(value.steps) &&
+    isStringArray(value.evidence)
+  );
+}
+
+function isAiQaDefect(value: unknown): value is AiQaReport["defects"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.title === "string" &&
+    isStringArray(value.nodeIds) &&
+    isStringArray(value.evidence) &&
+    typeof value.whyItMatters === "string" &&
+    isSeverity(value.severity) &&
+    isStringArray(value.reproSteps) &&
+    isStringArray(value.neededEvidence)
+  );
+}
+
+function isAiQaReport(value: unknown): value is AiQaReport {
+  if (!isRecord(value) || !isRecord(value.botOverview) || !isRecord(value.nextRun)) {
+    return false;
+  }
+
+  return (
+    value.schemaVersion === 2 &&
+    value.analysisMode === "staged-telegram-bot-qa" &&
+    typeof value.botOverview.summary === "string" &&
+    typeof value.botOverview.businessPurpose === "string" &&
+    isStringArray(value.botOverview.knownScope) &&
+    isStringArray(value.botOverview.mainFlows) &&
+    isStringArray(value.botOverview.safetyBoundaries) &&
+    isConfidence(value.botOverview.confidence) &&
+    Array.isArray(value.branchReviews) &&
+    value.branchReviews.every(isAiQaBranchReview) &&
+    Array.isArray(value.scenarioPlan) &&
+    value.scenarioPlan.every(isAiQaScenario) &&
+    Array.isArray(value.defects) &&
+    value.defects.every(isAiQaDefect) &&
+    isStringArray(value.coverageGaps) &&
+    isStringArray(value.questionsForProduct) &&
+    typeof value.nextRun.recommendedDepth === "number" &&
+    typeof value.nextRun.recommendedMaxNodes === "number" &&
+    isStringArray(value.nextRun.focusBranches) &&
+    isStringArray(value.nextRun.webAppChecks) &&
+    isStringArray(value.telegramSummary)
+  );
+}
+
 function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
+  const terminalUrlButtons = map.nodes.flatMap((node) =>
+    node.skippedButtons
+      .filter((button) => button.skipReason === "url_or_webapp_terminal")
+      .map((button) => ({
+        nodeId: node.id,
+        path: node.path,
+        text: button.text,
+        type: button.type
+      }))
+  );
+  const safeDeniedButtons = map.nodes.flatMap((node) =>
+    node.skippedButtons
+      .filter((button) => button.skipReason === "safe_deny_rule")
+      .map((button) => ({
+        nodeId: node.id,
+        path: node.path,
+        text: button.text,
+        type: button.type
+      }))
+  );
+
   return {
+    schemaVersion: "compact-map-v2",
     bot: map.bot,
     startPayload: map.startPayload,
     limits: map.limits,
+    graphStats: {
+      nodeCount: map.nodes.length,
+      edgeCount: map.edges.length,
+      terminalUrlButtonCount: terminalUrlButtons.length,
+      safeDeniedButtonCount: safeDeniedButtons.length
+    },
     nodes: map.nodes.map((node) => ({
       id: node.id,
       path: node.path,
       depth: node.depth,
+      messageWindow: node.messageWindow,
       tail: node.tail.slice(-6).map((message) => ({
         outgoing: message.outgoing,
         text: compactText(message.text, 360)
@@ -384,8 +560,82 @@ function compactMapForAi(map: BotMap, heuristic: HeuristicEnrichment): unknown {
       heuristic: heuristic.nodeAnalysis[node.id]
     })),
     edges: map.edges,
+    terminalUrlButtons,
+    safeDeniedButtons,
     heuristicProductSummary: heuristic.productSummary
   };
+}
+
+function buildAiQaPrompt(map: BotMap, heuristic: HeuristicEnrichment): string {
+  return [
+    "Ты senior QA architect для Telegram-ботов, Telegram Mini Apps и backend-integrated flows.",
+    "Нужно сделать staged QA analysis по карте бота.",
+    "",
+    "Жесткие правила:",
+    "- сначала дай общий взгляд на бота целиком, потом разбор каждой ветки;",
+    "- отделяй observed evidence от inference: не выдавай догадки за факт;",
+    "- каждую branchReview привязывай к nodeId и path из карты;",
+    "- если ветка не покрыта из-за лимита или safe-deny, добавь это в missingEvidence/coverageGaps;",
+    "- не предлагай автокликать оплату, вывод денег, delete/cancel/confirm без отдельного безопасного сценария;",
+    "- WebApp/URL ветки помечай как требующие Playwright-проверки со screenshot, console и network evidence;",
+    "- пиши по-русски, коротко и конкретно, без markdown;",
+    "- верни только валидный JSON.",
+    "",
+    "Верни JSON строго такой формы:",
+    "{",
+    '  "schemaVersion": 2,',
+    '  "analysisMode": "staged-telegram-bot-qa",',
+    '  "botOverview": {',
+    '    "summary": "...",',
+    '    "businessPurpose": "...",',
+    '    "knownScope": ["что реально покрыто картой"],',
+    '    "mainFlows": ["..."],',
+    '    "safetyBoundaries": ["..."],',
+    '    "confidence": "low|medium|high"',
+    "  },",
+    '  "branchReviews": [{',
+    '    "nodeId": "...",',
+    '    "path": ["..."],',
+    '    "currentEvidence": ["что видно в transcript/buttons"],',
+    '    "inferredPurpose": "...",',
+    '    "expectedBehavior": ["..."],',
+    '    "observedBehavior": ["..."],',
+    '    "risks": ["..."],',
+    '    "tests": ["..."],',
+    '    "missingEvidence": ["..."],',
+    '    "severity": "low|medium|high|critical",',
+    '    "confidence": "low|medium|high"',
+    "  }],",
+    '  "scenarioPlan": [{',
+    '    "name": "...",',
+    '    "why": "...",',
+    '    "priority": "low|medium|high|critical",',
+    '    "steps": ["..."],',
+    '    "evidence": ["..."]',
+    "  }],",
+    '  "defects": [{',
+    '    "title": "...",',
+    '    "nodeIds": ["..."],',
+    '    "evidence": ["..."],',
+    '    "whyItMatters": "...",',
+    '    "severity": "low|medium|high|critical",',
+    '    "reproSteps": ["..."],',
+    '    "neededEvidence": ["..."]',
+    "  }],",
+    '  "coverageGaps": ["..."],',
+    '  "questionsForProduct": ["..."],',
+    '  "nextRun": {',
+    '    "recommendedDepth": 2,',
+    '    "recommendedMaxNodes": 25,',
+    '    "focusBranches": ["..."],',
+    '    "webAppChecks": ["..."]',
+    "  },",
+    '  "telegramSummary": ["короткие строки для Telegram"]',
+    "}",
+    "",
+    "Карта бота:",
+    JSON.stringify(compactMapForAi(map, heuristic))
+  ].join("\n");
 }
 
 export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichment): Promise<AiReview> {
@@ -405,22 +655,7 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
     };
   }
 
-  const prompt = [
-    "Ты senior QA architect для Telegram-ботов и webapp flows.",
-    "Проанализируй карту бота целиком, потом каждую ветку отдельно.",
-    "Не ограничивайся найденными ошибками: объясни назначение веток, ожидаемую бизнес-логику, риски и тесты.",
-    "Верни строго JSON без markdown в форме:",
-    "{",
-    '  "overallView": "...",',
-    '  "branchReviews": [{"nodeId":"...","purpose":"...","expectedBehavior":["..."],"risks":["..."],"tests":["..."],"severity":"low|medium|high"}],',
-    '  "scenarioPlan": [{"name":"...","why":"...","steps":["..."],"evidence":["..."]}],',
-    '  "coverageGaps": ["..."],',
-    '  "questionsForProduct": ["..."]',
-    "}",
-    "",
-    "Карта бота:",
-    JSON.stringify(compactMapForAi(map, heuristic))
-  ].join("\n");
+  const prompt = buildAiQaPrompt(map, heuristic);
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -436,7 +671,7 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
           {
             role: "system",
             content:
-              "You analyze Telegram bot QA maps. Be concrete, conservative, and return valid JSON only."
+              "You analyze Telegram bot QA maps in staged mode. Be concrete, conservative, and return valid JSON only."
           },
           { role: "user", content: prompt }
         ]
@@ -458,12 +693,25 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
     }
 
     const rawText = String(payload.choices?.[0]?.message?.content || "").trim();
+    const parsed = extractJsonObject(rawText) || undefined;
+    const report = isAiQaReport(parsed) ? parsed : undefined;
+
     return {
       enabled: true,
       provider,
       model,
+      schemaVersion: 2,
+      promptVersion: AI_PROMPT_VERSION,
       rawText,
-      parsed: extractJsonObject(rawText) || undefined
+      parsed,
+      ...(report ? { report } : {}),
+      ...(!report
+        ? {
+            parseError: parsed
+              ? "AI response JSON does not match staged QA schema."
+              : "AI response did not contain parseable JSON."
+          }
+        : {})
     };
   } catch (error) {
     return {
@@ -473,6 +721,117 @@ export async function requestAiReview(map: BotMap, heuristic: HeuristicEnrichmen
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+function markdownList(values: string[] | undefined, fallback = "нет данных"): string[] {
+  if (!values || values.length === 0) {
+    return [`- ${fallback}`];
+  }
+  return values.map((value) => `- ${value}`);
+}
+
+export function buildQaMarkdownReport(enriched: EnrichedBotMap): string {
+  const report = enriched.enrichment.ai.report;
+  const lines: string[] = [
+    `# QA report: @${enriched.bot}`,
+    "",
+    `Generated: ${enriched.generatedAtIso}`,
+    `Start payload: ${enriched.startPayload || "-"}`,
+    `Nodes: ${enriched.nodes.length}`,
+    `Edges: ${enriched.edges.length}`,
+    `AI: ${
+      enriched.enrichment.ai.enabled
+        ? `${enriched.enrichment.ai.model}${enriched.enrichment.ai.error ? ` (${enriched.enrichment.ai.error})` : ""}`
+        : "disabled"
+    }`,
+    ""
+  ];
+
+  if (report) {
+    lines.push("## Overall view", "", report.botOverview.summary, "");
+    lines.push("### Business purpose", "", report.botOverview.businessPurpose, "");
+    lines.push("### Main flows", ...markdownList(report.botOverview.mainFlows), "");
+    lines.push("### Safety boundaries", ...markdownList(report.botOverview.safetyBoundaries), "");
+    lines.push("## Branch reviews", "");
+
+    for (const branch of report.branchReviews) {
+      lines.push(
+        `### ${branch.nodeId} (${branch.severity}, confidence: ${branch.confidence})`,
+        `Path: ${branch.path.join(" > ") || "/start"}`,
+        "",
+        `Purpose: ${branch.inferredPurpose}`,
+        "",
+        "Observed:",
+        ...markdownList(branch.observedBehavior),
+        "",
+        "Risks:",
+        ...markdownList(branch.risks),
+        "",
+        "Tests:",
+        ...markdownList(branch.tests),
+        "",
+        "Missing evidence:",
+        ...markdownList(branch.missingEvidence),
+        ""
+      );
+    }
+
+    lines.push("## Defects", "");
+    if (report.defects.length === 0) {
+      lines.push("- явных дефектов по карте не выделено", "");
+    } else {
+      for (const defect of report.defects) {
+        lines.push(
+          `### ${defect.title} (${defect.severity})`,
+          `Nodes: ${defect.nodeIds.join(", ") || "-"}`,
+          "",
+          "Evidence:",
+          ...markdownList(defect.evidence),
+          "",
+          `Impact: ${defect.whyItMatters}`,
+          "",
+          "Repro:",
+          ...markdownList(defect.reproSteps),
+          ""
+        );
+      }
+    }
+
+    lines.push("## Scenario plan", "");
+    for (const scenario of report.scenarioPlan) {
+      lines.push(
+        `### ${scenario.name} (${scenario.priority})`,
+        scenario.why,
+        "",
+        "Steps:",
+        ...markdownList(scenario.steps),
+        "",
+        "Evidence:",
+        ...markdownList(scenario.evidence),
+        ""
+      );
+    }
+
+    lines.push("## Coverage gaps", ...markdownList(report.coverageGaps), "");
+    lines.push("## Questions for product", ...markdownList(report.questionsForProduct), "");
+    lines.push("## Next run", "");
+    lines.push(`- depth: ${report.nextRun.recommendedDepth}`);
+    lines.push(`- maxNodes: ${report.nextRun.recommendedMaxNodes}`);
+    lines.push(...markdownList(report.nextRun.focusBranches.map((branch) => `focus: ${branch}`), "нет focus branches"));
+    lines.push(...markdownList(report.nextRun.webAppChecks.map((check) => `webapp: ${check}`), "нет webapp checks"));
+    lines.push("");
+    lines.push("## Telegram summary", ...markdownList(report.telegramSummary), "");
+  } else {
+    lines.push("## Overall view", "", enriched.enrichment.productSummary.overview, "");
+    lines.push("## Main flows", ...markdownList(enriched.enrichment.productSummary.mainFlows), "");
+    lines.push("## Critical risks", ...markdownList(enriched.enrichment.productSummary.criticalRisks), "");
+    lines.push("## Recommended next steps", ...markdownList(enriched.enrichment.productSummary.recommendedNextSteps), "");
+    if (enriched.enrichment.ai.parseError) {
+      lines.push(`AI parse error: ${enriched.enrichment.ai.parseError}`, "");
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 export async function buildEnrichedBotMap(map: BotMap): Promise<EnrichedBotMap> {

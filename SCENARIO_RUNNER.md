@@ -138,9 +138,12 @@ Artifacts:
 ```text
 test-results/<run>/mtproto-discovery/bot-map.json
 test-results/<run>/mtproto-discovery/bot-map.enriched.json
+test-results/<run>/mtproto-discovery/qa-report.md
 ```
 
-`bot-map.enriched.json` contains per-node purpose, expected behavior, risks, suggested tests, branch analysis, product summary, and optional AI review.
+`bot-map.enriched.json` contains per-node purpose, expected behavior, risks, suggested tests, branch analysis, product summary, and optional staged AI review.
+When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, branch-by-branch analysis, scenario plan, defects, coverage gaps, product questions, next-run recommendation, and short Telegram summary.
+`qa-report.md` is the readable report built from the staged AI output, with heuristic fallback when AI is disabled or returns an invalid shape.
 
 ## GitHub Actions
 

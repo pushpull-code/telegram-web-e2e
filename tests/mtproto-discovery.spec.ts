@@ -4,6 +4,7 @@ import { test } from "@playwright/test";
 import { botStartPayload, botUsername } from "./helpers/bot-config";
 import {
   buildEnrichedBotMap,
+  buildQaMarkdownReport,
   normalizeNodeIdPart,
   type BotMap,
   type BotMapButton,
@@ -248,6 +249,9 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     const enrichedPath = path.join(outputDir, "bot-map.enriched.json");
     fs.writeFileSync(enrichedPath, JSON.stringify(enriched, null, 2), "utf8");
 
+    const qaReportPath = path.join(outputDir, "qa-report.md");
+    fs.writeFileSync(qaReportPath, buildQaMarkdownReport(enriched), "utf8");
+
     await testInfo.attach("mtproto-bot-map", {
       path: rawPath,
       contentType: "application/json"
@@ -255,6 +259,10 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
     await testInfo.attach("mtproto-bot-map-enriched", {
       path: enrichedPath,
       contentType: "application/json"
+    });
+    await testInfo.attach("mtproto-qa-report", {
+      path: qaReportPath,
+      contentType: "text/markdown"
     });
   });
 });
