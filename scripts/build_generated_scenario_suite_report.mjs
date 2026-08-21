@@ -62,6 +62,7 @@ function normalizePathForReport(filePath) {
 
 function cleanLine(value, maxLength = 220) {
   const text = String(value ?? "")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   if (text.length <= maxLength) {

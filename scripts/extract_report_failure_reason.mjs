@@ -12,6 +12,13 @@ function writeResult(result) {
   console.log(`Saved failure reason to ${outputPath}: ${JSON.stringify(result)}`);
 }
 
+function cleanLine(value) {
+  return String(value ?? "")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 if (runStatus === "success") {
   writeResult({});
   process.exit(0);
@@ -30,7 +37,7 @@ if (fs.existsSync(generatedSuiteReportPath)) {
         : null;
       const draftId = String(firstFailedDraft.id || firstFailedDraft.scenario || "generated scenario").trim();
       const stepName = String(failedStep?.name || "").trim();
-      const stepError = String(failedStep?.error || firstFailedDraft.firstError || "").replace(/\s+/g, " ").trim();
+      const stepError = cleanLine(failedStep?.error || firstFailedDraft.firstError || "");
 
       writeResult({
         code: "generated_suite_failed",
@@ -62,7 +69,7 @@ if (markerMatches.length > 0) {
   const [, code, message] = markerMatches[markerMatches.length - 1];
   writeResult({
     code: String(code || "").trim(),
-    message: String(message || "").trim()
+    message: cleanLine(message)
   });
   process.exit(0);
 }
@@ -76,7 +83,7 @@ if (/\/join_task returned no-task branch/i.test(raw) || /There are no tasks avai
 }
 
 const errorMatches = [...raw.matchAll(/Error:\s*([^\r\n]+)/g)];
-const lastErrorMessage = errorMatches.length > 0 ? String(errorMatches[errorMatches.length - 1][1] || "").trim() : "";
+const lastErrorMessage = errorMatches.length > 0 ? cleanLine(errorMatches[errorMatches.length - 1][1]) : "";
 
 writeResult(
   lastErrorMessage
