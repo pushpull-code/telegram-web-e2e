@@ -8,5 +8,6 @@ output/
 tmp-*.png
 .cloudflare-report-screenshots.json
 .generated-scenario.json
+.generated-scenario-suite.json
 generated-scenario-source/
 cloudflare/telegram-runner/.wrangler/

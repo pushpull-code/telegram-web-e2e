@@ -174,12 +174,26 @@ Drafts marked `safety=test-account` are blocked by default. Enable them only for
 GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1 npm run scenario:extract-generated -- test-results/<run>/mtproto-discovery/generated-scenarios.json command-join-task .generated-scenario.json
 ```
 
+Extract a batch of generated safe drafts into a suite manifest:
+
+```bash
+npm run scenario:extract-generated-suite -- test-results/<run>/mtproto-discovery/generated-scenarios.json safe .generated-scenario-suite.json
+GENERATED_SCENARIO_SUITE_FILE=.generated-scenario-suite.json npm run test:generated-scenarios
+```
+
+Batch selectors:
+
+- `safe`: observed safe drafts only; this is the default for CI.
+- `all-safe`: all runnable safe drafts, including baseline command drafts.
+- `runnable`: safe plus `test-account` drafts when `GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1`.
+- `draft-a,draft-b`: explicit draft ids.
+
 ## GitHub Actions
 
 The workflow suite input now supports:
 
 ```text
-bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | autorun | freelancer | settings | all
+bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | scenario | discover | autorun | freelancer | settings | all
 ```
 
 `generated_scenario` runs MTProto discovery first, extracts the selected draft from `generated-scenarios.json`, then runs the normal scenario runner. Inputs:
@@ -187,7 +201,13 @@ bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | au
 - `generated_scenario_draft`: default `start-smoke`
 - `generated_scenario_allow_test_account`: default `false`
 
-The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json`.
+`generated_scenarios` runs MTProto discovery first, extracts a selected batch, then runs the generated scenario suite. Inputs:
+
+- `generated_scenario_drafts`: default `safe`
+- `generated_scenario_max_drafts`: default `4`
+- `generated_scenario_allow_test_account`: default `false`
+
+The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json` or `scenario-suite.json`.
 
 The Telegram dispatch script also accepts:
 
@@ -196,6 +216,8 @@ The Telegram dispatch script also accepts:
 /run discover_mtproto
 /run generated_scenario
 /run generated_scenario start-smoke
+/run generated_scenarios
+/run generated_scenarios safe
 /run scenario
 /run discover
 ```

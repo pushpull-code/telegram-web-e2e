@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Test suite to run (bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | autorun | freelancer | settings | all)'
+        description: 'Test suite to run (bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | scenario | discover | autorun | freelancer | settings | all)'
         required: false
         default: 'bot'
       scenario_file:
@@ -19,6 +19,14 @@ on:
         description: 'Allow generated drafts marked safety=test-account (true | false)'
         required: false
         default: 'false'
+      generated_scenario_drafts:
+        description: 'Selector for generated_scenarios suite: safe | all-safe | runnable | comma-separated draft ids'
+        required: false
+        default: 'safe'
+      generated_scenario_max_drafts:
+        description: 'Max drafts for generated_scenarios suite'
+        required: false
+        default: '4'
       chat_id:
         description: 'Telegram chat id for Cloudflare report callback (optional)'
         required: false
@@ -61,7 +69,9 @@ jobs:
       RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
       SCENARIO_FILE: ${{ inputs.scenario_file }}
       GENERATED_SCENARIO_DRAFT: ${{ inputs.generated_scenario_draft }}
+      GENERATED_SCENARIO_DRAFTS: ${{ inputs.generated_scenario_drafts }}
       GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT: ${{ inputs.generated_scenario_allow_test_account }}
+      GENERATED_SCENARIO_MAX_DRAFTS: ${{ inputs.generated_scenario_max_drafts }}
       RUN_REPORT_CALLBACK_URL: ${{ inputs.report_callback_url }}
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
@@ -133,7 +143,7 @@ jobs:
         run: npm run test:mtproto
 
       - name: Run MTProto discovery with branch analysis
-        if: ${{ inputs.suite == 'discover_mtproto' || inputs.suite == 'generated_scenario' || inputs.suite == 'all' }}
+        if: ${{ inputs.suite == 'discover_mtproto' || inputs.suite == 'generated_scenario' || inputs.suite == 'generated_scenarios' || inputs.suite == 'all' }}
         run: npm run test:discover:mtproto
 
       - name: Extract generated scenario draft
@@ -163,9 +173,38 @@ jobs:
 
           echo "SCENARIO_FILE=.generated-scenario.json" >> "${GITHUB_ENV}"
 
+      - name: Extract generated scenario suite
+        if: ${{ inputs.suite == 'generated_scenarios' }}
+        shell: bash
+        run: |
+          generated_file="$(find test-results -path '*/mtproto-discovery/generated-scenarios.json' -print -quit)"
+          if [ -z "${generated_file}" ]; then
+            echo "::error::generated-scenarios.json was not found under test-results/"
+            exit 1
+          fi
+
+          node scripts/extract_generated_scenario_suite.mjs \
+            "${generated_file}" \
+            "${GENERATED_SCENARIO_DRAFTS}" \
+            ".generated-scenario-suite.json"
+
+          mkdir -p generated-scenario-source
+          cp "${generated_file}" generated-scenario-source/generated-scenarios.json
+          for artifact in bot-map.json bot-map.enriched.json generated-test-plan.json telegram-summary.txt qa-report.md web-target-audits.json; do
+            source_file="$(dirname "${generated_file}")/${artifact}"
+            if [ -f "${source_file}" ]; then
+              cp "${source_file}" "generated-scenario-source/${artifact}"
+            fi
+          done
+          cp ".generated-scenario-suite.json" generated-scenario-source/scenario-suite.json
+
       - name: Run scenario tests
         if: ${{ inputs.suite == 'scenario' || inputs.suite == 'generated_scenario' || inputs.suite == 'all' }}
         run: npm run test:scenario
+
+      - name: Run generated scenario suite
+        if: ${{ inputs.suite == 'generated_scenarios' }}
+        run: npm run test:generated-scenarios
 
       - name: Run discovery tests
         if: ${{ inputs.suite == 'discover' || inputs.suite == 'all' }}
@@ -211,6 +250,7 @@ jobs:
             test-results/
             generated-scenario-source/
             .generated-scenario.json
+            .generated-scenario-suite.json
           retention-days: 14
 
       - name: Calculate run duration

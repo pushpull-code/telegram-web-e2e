@@ -10,6 +10,8 @@
     "test:freelancer": "playwright test tests/bot-freelancer.spec.ts --project=chromium",
     "test:scenario": "playwright test tests/scenario-runner.spec.ts --project=chromium",
     "scenario:extract-generated": "node scripts/extract_generated_scenario.mjs",
+    "scenario:extract-generated-suite": "node scripts/extract_generated_scenario_suite.mjs",
+    "test:generated-scenarios": "playwright test tests/generated-scenario-suite.spec.ts --project=chromium",
     "test:discover": "playwright test tests/discovery-runner.spec.ts --project=chromium",
     "test:discover:mtproto": "playwright test tests/mtproto-discovery.spec.ts --project=mtproto",
     "test:mtproto": "playwright test tests/mtproto-smoke.spec.ts --project=mtproto",
