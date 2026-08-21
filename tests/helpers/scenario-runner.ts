@@ -135,6 +135,7 @@ async function waitForTailTextAny(
   page: Page,
   anchors: string[],
   options: {
+    afterActionText?: string;
     beforeMessages?: string[];
     requireFreshResponse: boolean;
     tailLimit: number;
@@ -147,9 +148,11 @@ async function waitForTailTextAny(
     .poll(
       async () => {
         const tail = await collectTailMessages(page, options.tailLimit);
-        const candidateMessages = options.requireFreshResponse
-          ? tailMessagesAfter(options.beforeMessages || [], tail)
-          : tail;
+        const candidateMessages = options.afterActionText
+          ? tailMessagesAfterAction(tail, options.afterActionText)
+          : options.requireFreshResponse
+            ? tailMessagesAfter(options.beforeMessages || [], tail)
+            : tail;
 
         if (options.requireFreshResponse && candidateMessages.length === 0) {
           return false;
@@ -162,6 +165,21 @@ async function waitForTailTextAny(
       { timeout: options.timeoutMs }
     )
     .toBeTruthy();
+}
+
+function tailMessagesAfterAction(tail: string[], actionText: string): string[] {
+  const normalizedAction = normalizeForMatch(actionText);
+  if (!normalizedAction) {
+    return tail;
+  }
+
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    if (normalizeForMatch(tail[index]).includes(normalizedAction)) {
+      return tail.slice(index + 1);
+    }
+  }
+
+  return [];
 }
 
 function tailMessagesAfter(before: string[], after: string[]): string[] {
@@ -307,6 +325,7 @@ async function runStep(
 
   if (step.expectTextAny?.length) {
     await waitForTailTextAny(page, step.expectTextAny, {
+      afterActionText: step.send,
       beforeMessages: tailBefore,
       requireFreshResponse: step.requireFreshResponse ?? hasActionThatCanChangeChat,
       tailLimit,
