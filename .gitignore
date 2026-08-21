@@ -7,4 +7,6 @@ output/
 .tmp_tweb_src/
 tmp-*.png
 .cloudflare-report-screenshots.json
+.generated-scenario.json
+generated-scenario-source/
 cloudflare/telegram-runner/.wrangler/

@@ -187,6 +187,8 @@ bot | mtproto | discover_mtproto | generated_scenario | scenario | discover | au
 - `generated_scenario_draft`: default `start-smoke`
 - `generated_scenario_allow_test_account`: default `false`
 
+The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json`.
+
 The Telegram dispatch script also accepts:
 
 ```text

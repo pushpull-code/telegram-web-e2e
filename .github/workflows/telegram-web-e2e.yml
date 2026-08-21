@@ -151,6 +151,16 @@ jobs:
             "${GENERATED_SCENARIO_DRAFT}" \
             ".generated-scenario.json"
 
+          mkdir -p generated-scenario-source
+          cp "${generated_file}" generated-scenario-source/generated-scenarios.json
+          for artifact in bot-map.json bot-map.enriched.json generated-test-plan.json telegram-summary.txt qa-report.md web-target-audits.json; do
+            source_file="$(dirname "${generated_file}")/${artifact}"
+            if [ -f "${source_file}" ]; then
+              cp "${source_file}" "generated-scenario-source/${artifact}"
+            fi
+          done
+          cp ".generated-scenario.json" generated-scenario-source/scenario.json
+
           echo "SCENARIO_FILE=.generated-scenario.json" >> "${GITHUB_ENV}"
 
       - name: Run scenario tests
@@ -197,7 +207,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-test-results
-          path: test-results/
+          path: |
+            test-results/
+            generated-scenario-source/
+            .generated-scenario.json
           retention-days: 14
 
       - name: Calculate run duration
