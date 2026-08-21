@@ -660,11 +660,17 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
         continue;
       }
       visited.add(currentId);
+      console.log(
+        `[mtproto-discovery] node ${nodes.length + 1}/${maxNodes}: id=${currentId}, depth=${currentPath.length}, path=${currentPath.join(" > ") || "/start"}`
+      );
 
       const replayError = await replayPath(peer, currentPath);
       const state = await getMtprotoChatState(peer, stateLimit);
       const node = buildNode(currentId, currentPath, state.messages, replayError);
       nodes.push(node);
+      console.log(
+        `[mtproto-discovery] collected ${currentId}: buttons=${node.buttons.length}, skipped=${node.skippedButtons.length}${replayError ? `, error=${replayError}` : ""}`
+      );
 
       if (!replayError && currentPath.length < maxDepth) {
         for (const button of node.buttons) {

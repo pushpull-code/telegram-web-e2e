@@ -1565,12 +1565,15 @@ function buttonPathScenario(enriched: EnrichedBotMap, node: BotMapNode): Generat
       clickButton: label,
       timeoutMs: 45_000,
       waitMs: isLast ? 0 : 1400,
-      requireFreshResponse: false
+      requireFreshResponse: false,
+      ...(ALLOW_UNSAFE_BUTTON_SCENARIOS && isLast ? { optional: true } : {})
     };
     steps.push(isLast ? applyNodeExpectations(baseStep, node) : baseStep);
   }
 
-  return executableScenario(enriched, `mtproto-generated-button-${normalizeNodeIdPart(node.path.join("-"))}`, steps);
+  return executableScenario(enriched, `mtproto-generated-button-${normalizeNodeIdPart(node.path.join("-"))}`, steps, {
+    continueOnFailure: ALLOW_UNSAFE_BUTTON_SCENARIOS
+  });
 }
 
 function buttonPathDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDraft[] {
@@ -1707,6 +1710,7 @@ export function buildGeneratedExecutableScenarioBundle(enriched: EnrichedBotMap)
       "Use only drafts with runnableNow=true as SCENARIO_FILE after review.",
       "test-account drafts can mutate task assignment or onboarding state; run them only on a dedicated QA Telegram account.",
       "GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS=1 converts manual state-changing buttons into runnable test-account drafts for dev bots.",
+      "In unsafe/dev mode generated button-path scenarios are exploratory: final expectation failures are recorded with screenshots/tail evidence, but the runner continues so AI can review the whole branch set.",
       "manual drafts intentionally have no scenario object until a human approves the risk boundary."
     ]
   };

@@ -338,6 +338,79 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
   return lines.join("\n");
 }
 
+function formatGeneratedSuiteAiReviewText(lang, aiReview) {
+  if (!aiReview || typeof aiReview !== "object") {
+    return "";
+  }
+
+  const overview = aiReview.overview && typeof aiReview.overview === "object" ? aiReview.overview : {};
+  const defects = Array.isArray(aiReview.defects) ? aiReview.defects : [];
+  const branchReviews = Array.isArray(aiReview.branch_reviews) ? aiReview.branch_reviews : [];
+  const coverageGaps = Array.isArray(aiReview.coverage_gaps) ? aiReview.coverage_gaps : [];
+  const nextRun = aiReview.next_run && typeof aiReview.next_run === "object" ? aiReview.next_run : {};
+  const ai = aiReview.ai && typeof aiReview.ai === "object" ? aiReview.ai : {};
+  const title = lang === LANG_EN ? "AI review" : "AI-разбор";
+  const defectTitle = lang === LANG_EN ? "defects" : "дефекты";
+  const branchTitle = lang === LANG_EN ? "branches" : "ветки";
+  const gapTitle = lang === LANG_EN ? "coverage gaps" : "пробелы";
+  const nextTitle = lang === LANG_EN ? "next" : "дальше";
+
+  const lines = ["", title];
+  const summary = compactReportText(overview.summary, 520);
+  if (summary) {
+    lines.push(summary);
+  }
+
+  const aiError = compactReportText(ai.error, 220);
+  if (aiError) {
+    lines.push(`AI: ${aiError}`);
+  }
+
+  for (const defect of defects.slice(0, 3)) {
+    const severity = compactReportText(defect?.severity, 40);
+    const titleText = compactReportText(defect?.title, 220);
+    if (titleText) {
+      lines.push(`- ${defectTitle}: ${severity ? `[${severity}] ` : ""}${titleText}`);
+    }
+    const nextCheck = compactReportText(defect?.next_check, 220);
+    if (nextCheck) {
+      lines.push(`  ${nextTitle}: ${nextCheck}`);
+    }
+  }
+
+  const notableBranches = branchReviews
+    .filter((branch) => {
+      const verdict = String(branch?.verdict || "").toLowerCase();
+      return verdict !== "pass" || (Array.isArray(branch?.defects) && branch.defects.length > 0);
+    })
+    .slice(0, 4);
+  for (const branch of notableBranches) {
+    const id = compactReportText(branch?.draft_id, 90);
+    const verdict = compactReportText(branch?.verdict, 40);
+    const observed = compactReportText(branch?.observed_behavior, 220);
+    if (id || observed) {
+      lines.push(`- ${branchTitle}: ${id || "branch"}${verdict ? ` (${verdict})` : ""}${observed ? ` — ${observed}` : ""}`);
+    }
+  }
+
+  for (const gap of coverageGaps.slice(0, 3)) {
+    const text = compactReportText(gap, 220);
+    if (text) {
+      lines.push(`- ${gapTitle}: ${text}`);
+    }
+  }
+
+  const runnerChanges = Array.isArray(nextRun.runner_changes) ? nextRun.runner_changes : [];
+  for (const change of runnerChanges.slice(0, 2)) {
+    const text = compactReportText(change, 220);
+    if (text) {
+      lines.push(`- ${nextTitle}: ${text}`);
+    }
+  }
+
+  return lines.length > 2 ? lines.join("\n") : "";
+}
+
 async function telegramJson(env, method, payload) {
   const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -691,6 +764,7 @@ async function handleGithubReport(env, request) {
   const phase = String(payload.phase || "single").trim().toLowerCase();
   const failureReason = failureReasonText(lang, payload.failure_code, payload.failure_message);
   const generatedSuiteText = formatGeneratedSuiteText(lang, payload.generated_suite);
+  const generatedSuiteAiReviewText = formatGeneratedSuiteAiReviewText(lang, payload.generated_suite_ai_review);
 
   const reportText = [
     t(lang, "reportTitle"),
@@ -699,7 +773,8 @@ async function handleGithubReport(env, request) {
     failureReason ? `${t(lang, "reportReason")}: ${failureReason}` : "",
     `${t(lang, "reportDuration")}: ${duration}`,
     runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : "",
-    generatedSuiteText
+    generatedSuiteText,
+    generatedSuiteAiReviewText
   ]
     .filter(Boolean)
     .join("\n");

@@ -223,6 +223,19 @@ jobs:
             "test-results" \
             "generated-scenario-source/generated-scenario-suite-report.md"
 
+      - name: Run AI generated scenario suite review
+        if: ${{ always() && inputs.suite == 'generated_scenarios' }}
+        shell: bash
+        run: |
+          if [ ! -f "generated-scenario-source/generated-scenario-suite-report.json" ]; then
+            echo "No generated suite report found; skipping AI review."
+            exit 0
+          fi
+
+          npm run scenario:ai-review-generated-suite -- \
+            "generated-scenario-source/generated-scenario-suite-report.json" \
+            "generated-scenario-source/generated-scenario-ai-review.md"
+
       - name: Run discovery tests
         if: ${{ inputs.suite == 'discover' || inputs.suite == 'all' }}
         run: npm run test:discover
@@ -307,4 +320,5 @@ jobs:
           SCREENSHOTS_FILE: ${{ env.SCREENSHOTS_FILE }}
           FAILURE_FILE: ${{ env.FAILURE_FILE }}
           GENERATED_SUITE_REPORT_FILE: generated-scenario-source/generated-scenario-suite-report.json
+          GENERATED_SUITE_AI_REVIEW_FILE: generated-scenario-source/generated-scenario-ai-review.json
         run: node scripts/send_cloudflare_report.mjs

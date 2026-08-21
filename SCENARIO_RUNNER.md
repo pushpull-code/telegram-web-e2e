@@ -189,11 +189,20 @@ npm run scenario:report-generated-suite -- .generated-scenario-suite.json test-r
 
 This writes both `generated-scenario-suite-report.md` for humans and `generated-scenario-suite-report.json` for AI/reporting integrations. The report gives the whole suite status first, then each generated branch with purpose, safety, attempts, step statuses, screenshots, and the last visible chat tail.
 
+Run the second-stage AI critic on the completed suite:
+
+```bash
+npm run scenario:ai-review-generated-suite -- generated-scenario-source/generated-scenario-suite-report.json generated-scenario-source/generated-scenario-ai-review.md
+```
+
+This reads the full discovered map, generated plan, executable drafts, suite results, screenshots paths, chat tails, web-target audits, and the discovery AI review. It writes `generated-scenario-ai-review.md` and `.json` with product overview, flow map, branch-by-branch verdicts, defects, coverage gaps, and next-run recommendations. If AI is not configured or returns invalid JSON, the script still writes a deterministic fallback review so CI/reporting does not fail.
+
 Batch selectors:
 
 - `safe`: observed safe drafts only; this is the default for CI.
 - `all-safe`: all runnable safe drafts, including baseline command drafts.
 - `runnable`: safe plus `test-account` drafts when `GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1`.
+- `dev` / `unsafe`: dev-bot mode; enables test-account drafts and unsafe button paths through `GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS=1` and `MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS=1`.
 - `draft-a,draft-b`: explicit draft ids.
 
 ## GitHub Actions
@@ -216,8 +225,8 @@ bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | sc
 - `generated_scenario_allow_test_account`: default `false`
 
 The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json` or `scenario-suite.json`.
-For `generated_scenarios`, it also includes `generated-scenario-suite-report.md` and `.json` so the bot or a later AI pass can review the full picture, not just one failed step.
-When a Cloudflare report callback is configured, `send_cloudflare_report.mjs` includes a bounded `generated_suite` payload from `generated-scenario-suite-report.json`; the Telegram runner worker renders it as a compact branch-check block.
+For `generated_scenarios`, it also includes `generated-scenario-suite-report.md`/`.json` and `generated-scenario-ai-review.md`/`.json` so the bot and AI critic can review the full picture, not just one failed step.
+When a Cloudflare report callback is configured, `send_cloudflare_report.mjs` includes bounded `generated_suite` and `generated_suite_ai_review` payloads; the Telegram runner worker renders compact branch-check and AI-review blocks.
 
 The Telegram dispatch script also accepts:
 

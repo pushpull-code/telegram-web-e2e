@@ -13,9 +13,13 @@ const failureFile = (process.env.FAILURE_FILE || ".cloudflare-report-failure.jso
 const generatedSuiteReportFile = (
   process.env.GENERATED_SUITE_REPORT_FILE || "generated-scenario-source/generated-scenario-suite-report.json"
 ).trim();
+const generatedSuiteAiReviewFile = (
+  process.env.GENERATED_SUITE_AI_REVIEW_FILE || "generated-scenario-source/generated-scenario-ai-review.json"
+).trim();
 const maxChunkBase64Chars = Number(process.env.REPORT_CALLBACK_CHUNK_BASE64_MAX || "1500000");
 const maxChunkFiles = Number(process.env.REPORT_CALLBACK_CHUNK_FILE_MAX || "4");
 const maxGeneratedSuiteDrafts = Number(process.env.REPORT_CALLBACK_GENERATED_SUITE_MAX_DRAFTS || "8");
+const maxAiReviewBranches = Number(process.env.REPORT_CALLBACK_AI_REVIEW_BRANCH_MAX || "6");
 
 if (!chatId) {
   console.log("CHAT_ID is empty. Skip callback.");
@@ -129,6 +133,89 @@ function readGeneratedSuiteReport() {
 
 const generatedSuiteReport = readGeneratedSuiteReport();
 
+function readGeneratedSuiteAiReview() {
+  if (!fs.existsSync(generatedSuiteAiReviewFile)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(generatedSuiteAiReviewFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const review = parsed.review && typeof parsed.review === "object" ? parsed.review : {};
+    const overview = review.overview && typeof review.overview === "object" ? review.overview : {};
+    const nextRun = review.nextRun && typeof review.nextRun === "object" ? review.nextRun : {};
+
+    return {
+      schema_version: 1,
+      report_file: generatedSuiteAiReviewFile,
+      ai: {
+        enabled: Boolean(parsed.ai?.enabled),
+        provider: compactText(parsed.ai?.provider, 80),
+        model: compactText(parsed.ai?.model, 120),
+        error: compactText(parsed.ai?.error || parsed.ai?.parseError, 240)
+      },
+      overview: {
+        summary: compactText(overview.summary, 420),
+        product_purpose: compactText(overview.productPurpose, 300),
+        confidence: compactText(overview.confidence, 40),
+        main_flows: Array.isArray(overview.mainFlows)
+          ? overview.mainFlows.slice(0, 8).map((line) => compactText(line, 220))
+          : []
+      },
+      defects: Array.isArray(review.defects)
+        ? review.defects.slice(0, 6).map((defect) => ({
+            title: compactText(defect?.title, 180),
+            severity: compactText(defect?.severity, 40),
+            evidence: Array.isArray(defect?.evidence)
+              ? defect.evidence.slice(0, 4).map((line) => compactText(line, 220))
+              : [],
+            next_check: compactText(defect?.nextCheck, 220)
+          }))
+        : [],
+      branch_reviews: Array.isArray(review.branchReviews)
+        ? review.branchReviews.slice(0, Math.max(1, maxAiReviewBranches)).map((branch) => ({
+            draft_id: compactText(branch?.draftId, 100),
+            verdict: compactText(branch?.verdict, 40),
+            intended_behavior: compactText(branch?.intendedBehavior, 220),
+            observed_behavior: compactText(branch?.observedBehavior, 220),
+            defects: Array.isArray(branch?.defects)
+              ? branch.defects.slice(0, 3).map((line) => compactText(line, 180))
+              : [],
+            missing_evidence: Array.isArray(branch?.missingEvidence)
+              ? branch.missingEvidence.slice(0, 3).map((line) => compactText(line, 180))
+              : []
+          }))
+        : [],
+      coverage_gaps: Array.isArray(review.coverageGaps)
+        ? review.coverageGaps.slice(0, 8).map((line) => compactText(line, 220))
+        : [],
+      next_run: {
+        recommended_mode: compactText(nextRun.recommendedMode, 160),
+        focus_branches: Array.isArray(nextRun.focusBranches)
+          ? nextRun.focusBranches.slice(0, 8).map((line) => compactText(line, 160))
+          : [],
+        runner_changes: Array.isArray(nextRun.runnerChanges)
+          ? nextRun.runnerChanges.slice(0, 6).map((line) => compactText(line, 220))
+          : []
+      },
+      telegram_summary: Array.isArray(review.telegramSummary)
+        ? review.telegramSummary.slice(0, 8).map((line) => compactText(line, 260))
+        : []
+    };
+  } catch (error) {
+    console.log(
+      `Failed to parse ${generatedSuiteAiReviewFile}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+}
+
+const generatedSuiteAiReview = readGeneratedSuiteAiReview();
+
 function reportEnvelope(extra = {}) {
   return {
     chat_id: chatId,
@@ -140,6 +227,7 @@ function reportEnvelope(extra = {}) {
     failure_code: failureCode,
     failure_message: failureMessage,
     ...(generatedSuiteReport ? { generated_suite: generatedSuiteReport } : {}),
+    ...(generatedSuiteAiReview ? { generated_suite_ai_review: generatedSuiteAiReview } : {}),
     ...extra
   };
 }
