@@ -6,6 +6,11 @@ kv_namespaces = [
   { binding = "BOT_STATE_KV", id = "dfd4b24b750a4ad19497a9531f44422c", preview_id = "1624c0302b314c939ccbcf51c49f5efa" }
 ]
 
+[[workflows]]
+name = "telegram-e2e-runner-workflow"
+binding = "PANEL_RUN_WORKFLOW"
+class_name = "TelegramE2ERunWorkflow"
+
 [vars]
 GITHUB_WORKFLOW_FILE = "telegram-web-e2e.yml"
 GITHUB_REF = "main"

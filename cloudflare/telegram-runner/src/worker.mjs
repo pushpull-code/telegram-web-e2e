@@ -1,3 +1,4 @@
+import { WorkflowEntrypoint } from "cloudflare:workers";
 import { executeCloudflareNativeRun, isCloudflareNativeSuite } from "./cloudflare-runner.mjs";
 
 const LANG_RU = "ru";
@@ -308,6 +309,61 @@ function samePanelRunRequest(run, criteria) {
 }
 
 async function refreshPanelRunTerminalState(env, run) {
+  if (normalizePanelEngine(run?.engine, run?.suite) === "cloudflare" && run?.workflow_instance_id) {
+    try {
+      const instance = await env.PANEL_RUN_WORKFLOW?.get?.(String(run.workflow_instance_id));
+      const details = instance ? await instance.status() : null;
+      if (details?.status === "errored") {
+        const next = appendPanelEvent(
+          {
+            ...run,
+            status: "failure",
+            workflow_status: details.status,
+            error: details.error?.message || run.error || "Cloudflare Workflow завершился с ошибкой",
+            updated_at: nowIso(),
+            completed_at: nowIso()
+          },
+          { phase: "workflow", status: "failure", message: details.error?.message || "Cloudflare Workflow завершился с ошибкой" }
+        );
+        await savePanelRun(env, next);
+        return next;
+      }
+      if (details?.status === "terminated") {
+        const next = appendPanelEvent(
+          {
+            ...run,
+            status: "cancelled",
+            workflow_status: details.status,
+            updated_at: nowIso(),
+            completed_at: nowIso()
+          },
+          { phase: "workflow", status: "cancelled", message: "Cloudflare Workflow остановлен" }
+        );
+        await savePanelRun(env, next);
+        return next;
+      }
+      if (details?.status === "complete" && !isTerminalPanelRun(run)) {
+        const outputStatus = String(details.output?.status || "").trim();
+        const nextStatus = PANEL_TERMINAL_STATUSES.has(outputStatus) ? outputStatus : "completed";
+        const next = appendPanelEvent(
+          {
+            ...run,
+            status: nextStatus,
+            workflow_status: details.status,
+            updated_at: nowIso(),
+            completed_at: nowIso()
+          },
+          { phase: "workflow", status: nextStatus, message: "Cloudflare Workflow завершён" }
+        );
+        await savePanelRun(env, next);
+        return next;
+      }
+      return details?.status ? { ...run, workflow_status: details.status } : run;
+    } catch (_) {
+      return run;
+    }
+  }
+
   const runId = run?.github_run_id || runIdFromUrl(run?.github_run_url);
   if (!runId) {
     return run;
@@ -1155,6 +1211,59 @@ async function runCloudflarePanelRun(env, panelRunId) {
   }
 }
 
+function cloudflareWorkflowInstanceId(panelRunId) {
+  return String(panelRunId || "").trim();
+}
+
+async function createCloudflarePanelWorkflow(env, panelRunId) {
+  const workflow = env.PANEL_RUN_WORKFLOW;
+  if (!workflow || typeof workflow.create !== "function") {
+    return null;
+  }
+  const workflowInstanceId = cloudflareWorkflowInstanceId(panelRunId);
+  const instance = await workflow.create({
+    id: workflowInstanceId,
+    params: { panelRunId }
+  });
+  const details = await instance.status().catch(() => null);
+  return {
+    instanceId: instance.id || workflowInstanceId,
+    status: details?.status || "queued"
+  };
+}
+
+async function terminateCloudflarePanelWorkflow(env, run) {
+  const workflowInstanceId = String(run?.workflow_instance_id || "").trim();
+  if (!workflowInstanceId || !env.PANEL_RUN_WORKFLOW || typeof env.PANEL_RUN_WORKFLOW.get !== "function") {
+    return false;
+  }
+  const instance = await env.PANEL_RUN_WORKFLOW.get(workflowInstanceId);
+  await instance.terminate();
+  return true;
+}
+
+export class TelegramE2ERunWorkflow extends WorkflowEntrypoint {
+  async run(event, step) {
+    const panelRunId = String(event?.payload?.panelRunId || "").trim();
+    if (!panelRunId) {
+      throw new Error("panelRunId is required");
+    }
+    return step.do(
+      "execute cloudflare mtproto run",
+      { retries: { limit: 1, delay: "5 seconds", backoff: "linear" } },
+      async () => {
+        await runCloudflarePanelRun(this.env, panelRunId);
+        const run = await loadPanelRun(this.env, panelRunId);
+        return {
+          panelRunId,
+          status: run?.status || "unknown",
+          completed_at: run?.completed_at || null
+        };
+      }
+    );
+  }
+}
+
 function panelHtml() {
   return `<!doctype html>
 <html lang="ru">
@@ -1428,6 +1537,9 @@ function panelHtml() {
         discover_mtproto: "только карта",
         cloudflare: "Cloudflare",
         github: "GitHub Actions",
+        complete: "завершён",
+        errored: "ошибка",
+        terminated: "остановлен",
         smart: "умный выбор",
         safe: "безопасные",
         "all-safe": "все безопасные",
@@ -1527,6 +1639,8 @@ function panelHtml() {
       if (run.engine === "cloudflare") {
         const cf = run.cloudflare_run || {};
         const lines = [
+          run.workflow_instance_id ? "workflow: " + run.workflow_instance_id : "",
+          run.workflow_status ? "workflow статус: " + uiLabel(run.workflow_status) : "",
           cf.runner ? "runner: " + cf.runner : "runner: cloudflare-mtproto",
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
@@ -1798,13 +1912,29 @@ async function handlePanelRunCreate(env, request, ctx) {
   await savePanelRun(env, run);
 
   if (engine === "cloudflare") {
+    const workflowRun = await createCloudflarePanelWorkflow(env, panelRunId);
+    if (workflowRun) {
+      run = appendPanelEvent(
+        {
+          ...run,
+          status: "running",
+          workflow_instance_id: workflowRun.instanceId,
+          workflow_status: workflowRun.status,
+          updated_at: nowIso()
+        },
+        { phase: "workflow", status: workflowRun.status, message: "Cloudflare Workflow создан без GitHub Actions" }
+      );
+      await savePanelRun(env, run);
+      return jsonResponse({ run });
+    }
+
     run = appendPanelEvent(
       {
         ...run,
         status: "running",
         updated_at: nowIso()
       },
-      { phase: "cloudflare", status: "running", message: "Прогон запущен в Cloudflare без GitHub Actions" }
+      { phase: "cloudflare", status: "running", message: "Workflow не настроен, fallback-прогон запущен через waitUntil" }
     );
     await savePanelRun(env, run);
     const promise = runCloudflarePanelRun(env, panelRunId);
@@ -1898,6 +2028,37 @@ async function handlePanelRunCancel(env, request, id) {
     return jsonResponse({ run: refreshed, already_terminal: true });
   }
 
+  if (normalizePanelEngine(refreshed.engine, refreshed.suite) === "cloudflare") {
+    let terminated = false;
+    let terminateError = "";
+    try {
+      terminated = await terminateCloudflarePanelWorkflow(env, refreshed);
+    } catch (error) {
+      terminateError = error instanceof Error ? error.message : String(error);
+    }
+    const next = appendPanelEvent(
+      {
+        ...refreshed,
+        status: terminated ? "cancelled" : "cancel_requested",
+        workflow_status: terminated ? "terminated" : refreshed.workflow_status,
+        updated_at: nowIso(),
+        ...(terminated ? { completed_at: nowIso() } : {}),
+        ...(terminateError ? { cancel_error: terminateError } : {})
+      },
+      {
+        phase: "отмена",
+        status: terminated ? "cancelled" : "cancel_requested",
+        message: terminated
+          ? "Cloudflare Workflow остановлен"
+          : terminateError
+            ? `Не удалось остановить Cloudflare Workflow: ${terminateError}`
+            : "Отмена сохранена, Cloudflare runner остановится при следующей проверке"
+      }
+    );
+    await savePanelRun(env, next);
+    return jsonResponse({ run: next });
+  }
+
   const githubRunId = refreshed.github_run_id || runIdFromUrl(refreshed.github_run_url);
   if (!githubRunId) {
     const next = appendPanelEvent(
@@ -1952,10 +2113,11 @@ async function handlePanelRunGet(env, request, id) {
   if (authResponse) {
     return authResponse;
   }
-  const run = await loadPanelRun(env, id);
+  let run = await loadPanelRun(env, id);
   if (!run) {
     return jsonResponse({ error: "Прогон не найден" }, 404);
   }
+  run = await refreshPanelRunTerminalState(env, run);
   const responseRun = {
     ...run,
     drafts: compactPanelDrafts(run.generated_suite)
