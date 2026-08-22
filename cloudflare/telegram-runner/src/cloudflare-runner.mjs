@@ -1597,49 +1597,95 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
   });
 
   await startBot(env, peer, options);
-  try {
-    result.profile_country = await ensureProfileCountry(env, peer, options, expectedCountry, onProgress);
-  } catch (error) {
-    return {
-      ...result,
-      status: "blocked",
-      profile_country: {
-        status: "blocked",
-        error: error instanceof Error ? error.message : String(error)
-      }
-    };
-  }
-
-  if (result.profile_country.status !== "success") {
-    result.error = result.profile_country.error || "Profile country does not match current IP country.";
-    await notifyProgress(onProgress, {
-      phase: "country",
-      status: "failure",
-      message: `Страна не подтверждена: ${result.error}`
-    });
-    return {
-      ...result,
-      status: "blocked"
-    };
-  }
-  if (await shouldStop()) {
-    return { ...result, status: "cancelled" };
-  }
-
   await notifyProgress(onProgress, {
     phase: "country",
-    message: "Ищу check-device ссылку через /join_task"
+    message: "Проверяю /join_task перед сменой страны"
   });
   await sendMtprotoMessage(env, peer, JOIN_TASK_COMMAND);
   await sleep(options.settleMs);
-  const joinState = await getMtprotoChatState(env, peer, options.stateLimit);
-  const deviceTarget = findDeviceCheckTarget(joinState.messages || []);
+  let joinState = await getMtprotoChatState(env, peer, options.stateLimit);
+  let deviceTarget = findDeviceCheckTarget(joinState.messages || []);
   result.device_check_target = deviceTarget;
   result.join_task_before_check = {
     confirmation_blocker: confirmationStillBlocked(joinState.messages || []),
     outcome: parseDeviceCheckOutcome(joinState.messages || []),
     tail: activeIncomingMessages(joinState.messages || null, null).slice(-4).map(compactMessage)
   };
+
+  if (!result.join_task_before_check.confirmation_blocker && !deviceTarget) {
+    result.profile_country = {
+      status: "success",
+      selected_country_before: "",
+      selected_country_after: "",
+      changed: false,
+      reason: "/join_task already unblocked; country was not changed."
+    };
+    result.device_check = {
+      enabled: false,
+      reason: "/join_task already unblocked; device-check was not requested."
+    };
+    result.status = "success";
+    await notifyProgress(onProgress, {
+      phase: "country",
+      status: "success",
+      message: "/join_task уже доступен, страну не меняю"
+    });
+    return result;
+  }
+
+  if (!deviceTarget) {
+    try {
+      result.profile_country = await ensureProfileCountry(env, peer, options, expectedCountry, onProgress);
+    } catch (error) {
+      return {
+        ...result,
+        status: "blocked",
+        profile_country: {
+          status: "blocked",
+          error: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
+
+    if (result.profile_country.status !== "success") {
+      result.error = result.profile_country.error || "Profile country does not match current IP country.";
+      await notifyProgress(onProgress, {
+        phase: "country",
+        status: "failure",
+        message: `Страна не подтверждена: ${result.error}`
+      });
+      return {
+        ...result,
+        status: "blocked"
+      };
+    }
+    if (await shouldStop()) {
+      return { ...result, status: "cancelled" };
+    }
+
+    await notifyProgress(onProgress, {
+      phase: "country",
+      message: "Ищу check-device ссылку через /join_task"
+    });
+    await sendMtprotoMessage(env, peer, JOIN_TASK_COMMAND);
+    await sleep(options.settleMs);
+    joinState = await getMtprotoChatState(env, peer, options.stateLimit);
+    deviceTarget = findDeviceCheckTarget(joinState.messages || []);
+    result.device_check_target = deviceTarget;
+    result.join_task_before_check = {
+      confirmation_blocker: confirmationStillBlocked(joinState.messages || []),
+      outcome: parseDeviceCheckOutcome(joinState.messages || []),
+      tail: activeIncomingMessages(joinState.messages || null, null).slice(-4).map(compactMessage)
+    };
+  } else {
+    result.profile_country = {
+      status: "success",
+      selected_country_before: "",
+      selected_country_after: "",
+      changed: false,
+      reason: "/join_task requested device-check directly; country was not changed before check."
+    };
+  }
 
   if (!deviceTarget) {
     result.status = result.join_task_before_check.confirmation_blocker ? "blocked" : "success";
