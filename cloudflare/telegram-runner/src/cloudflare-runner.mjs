@@ -683,7 +683,7 @@ async function aiReview(env, map, suite) {
     model,
     temperature: 0,
     response_format: { type: "json_object" },
-    max_tokens: clampNumber(env.AI_MAX_TOKENS, 4000, 800, 8000),
+    max_tokens: clampNumber(env.AI_MAX_TOKENS, 8000, 800, 16000),
     messages: [
       {
         role: "system",
@@ -691,6 +691,7 @@ async function aiReview(env, map, suite) {
           [
             "You are a senior QA analyst for Telegram bots.",
             "Return only valid compact json. Do not include markdown, prose, code fences, or comments.",
+            "Keep each string under 180 characters, arrays under 5 items, and avoid long paragraphs.",
             "Use this json shape exactly:",
             '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
           ].join(" ")
