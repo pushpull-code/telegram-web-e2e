@@ -245,6 +245,14 @@ function compactPanelText(value, maxLength = 2000) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
 }
 
+function compactPanelJson(value, maxLength = 3000) {
+  try {
+    return compactPanelText(JSON.stringify(value), maxLength);
+  } catch (_) {
+    return compactPanelText(String(value || ""), maxLength);
+  }
+}
+
 function normalizeBrowserProfile(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return ["mobile", "tablet", "desktop"].includes(normalized) ? normalized : "mobile";
@@ -411,6 +419,8 @@ async function refreshPanelRunTerminalState(env, run) {
             ...run,
             status: "failure",
             workflow_status: details.status,
+            ...(details.output ? { workflow_output_debug: compactPanelJson(details.output) } : {}),
+            ...(details.error?.message ? { workflow_error: details.error.message } : {}),
             error: details.error?.message || run.error || "Cloudflare Workflow завершился с ошибкой",
             updated_at: nowIso(),
             completed_at: nowIso()
@@ -497,6 +507,9 @@ async function refreshPanelRunTerminalState(env, run) {
             ...sourceRun,
             status: nextStatus,
             workflow_status: details.status,
+            workflow_output_status: outputStatus,
+            ...(details.output ? { workflow_output_debug: compactPanelJson(details.output) } : {}),
+            ...(details.error?.message ? { workflow_error: details.error.message } : {}),
             ...(workflowError ? { error: workflowError } : {}),
             updated_at: nowIso(),
             completed_at: nowIso()
@@ -1493,23 +1506,60 @@ export class TelegramE2ERunWorkflow extends WorkflowEntrypoint {
     if (!panelRunId) {
       throw new Error("panelRunId is required");
     }
-    return step.do(
-      "execute cloudflare mtproto run",
-      { retries: { limit: 1, delay: "5 seconds", backoff: "linear" } },
-      async () => {
-        const fallbackRun = event?.payload?.run && typeof event.payload.run === "object" ? event.payload.run : null;
-        await runCloudflarePanelRun(this.env, panelRunId, fallbackRun);
-        const run = await loadPanelRun(this.env, panelRunId);
-        return {
+    const fallbackRun = event?.payload?.run && typeof event.payload.run === "object" ? event.payload.run : null;
+    try {
+      return await step.do(
+        "execute cloudflare panel run",
+        { retries: { limit: 1, delay: "5 seconds", backoff: "linear" } },
+        async () => {
+          await runCloudflarePanelRun(this.env, panelRunId, fallbackRun);
+          const run = await loadPanelRun(this.env, panelRunId);
+          return {
+            panelRunId,
+            status: run?.status || "unknown",
+            completed_at: run?.completed_at || null,
+            error: run?.error || null,
+            has_result: Boolean(run?.cloudflare_run || run?.generated_suite || run?.bot_map),
+            node_count: run?.cloudflare_run?.node_count || 0
+          };
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("TelegramE2ERunWorkflow failed", { panelRunId, message });
+      try {
+        const current = (await loadPanelRun(this.env, panelRunId)) || fallbackRun;
+        if (current) {
+          const next = appendPanelEvent(
+            {
+              ...current,
+              id: current.id || panelRunId,
+              status: "failure",
+              error: message,
+              workflow_error: message,
+              workflow_status: "complete",
+              updated_at: nowIso(),
+              completed_at: nowIso()
+            },
+            { phase: "workflow", status: "failure", message }
+          );
+          await savePanelRun(this.env, next);
+        }
+      } catch (saveError) {
+        console.error("TelegramE2ERunWorkflow failed to persist error", {
           panelRunId,
-          status: run?.status || "unknown",
-          completed_at: run?.completed_at || null,
-          error: run?.error || null,
-          has_result: Boolean(run?.cloudflare_run || run?.generated_suite || run?.bot_map),
-          node_count: run?.cloudflare_run?.node_count || 0
-        };
+          message: saveError instanceof Error ? saveError.message : String(saveError)
+        });
       }
-    );
+      return {
+        panelRunId,
+        status: "failure",
+        completed_at: nowIso(),
+        error: message,
+        has_result: false,
+        node_count: 0
+      };
+    }
   }
 }
 

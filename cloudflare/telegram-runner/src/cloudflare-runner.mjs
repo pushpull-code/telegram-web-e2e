@@ -1235,6 +1235,7 @@ async function captureUrlScreenshot(env, run, artifactName, url, metadata = {}) 
 
   const response = await env.BROWSER.quickAction("screenshot", {
     url,
+    ...(metadata.userAgent ? { userAgent: metadata.userAgent } : {}),
     screenshotOptions: {
       fullPage: true
     },
@@ -2390,6 +2391,8 @@ function browserProfileSettings(value) {
     return {
       name: "desktop",
       viewport: { width: 1365, height: 900 },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
       promptLabel: "desktop browser"
     };
   }
@@ -2397,12 +2400,16 @@ function browserProfileSettings(value) {
     return {
       name: "tablet",
       viewport: { width: 820, height: 1180 },
+      userAgent:
+        "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
       promptLabel: "tablet browser"
     };
   }
   return {
     name: "mobile",
     viewport: { width: 390, height: 844 },
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
     promptLabel: "mobile browser"
   };
 }
@@ -2658,6 +2665,7 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
     try {
       const response = await env.BROWSER.quickAction("json", {
         url: targetUrl,
+        userAgent: browserProfile.userAgent,
         prompt: [
           "Ты QA-инженер. Открой сайт или веб-приложение и сделай безопасный обзор пользовательских сценариев.",
           `Используй профиль устройства: ${browserProfile.promptLabel}.`,
@@ -2671,7 +2679,6 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
           "Верни краткий JSON: назначение, авторизация, основные flow, посещенные страницы, формы, блокеры, визуальные/логические проблемы и следующий шаг."
         ].join(" "),
         response_format: websiteAuditSchema(),
-        viewport: browserProfile.viewport,
         gotoOptions: {
           waitUntil: "networkidle2",
           timeout: 45000
@@ -2717,7 +2724,7 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
       kind: "website-screenshot",
       buttonText: compactText(targetUrl, 80),
       browserProfile: browserProfile.name,
-      viewport: browserProfile.viewport
+      userAgent: browserProfile.userAgent
     });
   } catch (error) {
     audit.screenshot_error = error instanceof Error ? error.message : String(error);
