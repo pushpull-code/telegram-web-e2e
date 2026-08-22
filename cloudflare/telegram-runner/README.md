@@ -45,11 +45,8 @@ Optional secret (if callback URL differs from current worker host):
 npx wrangler secret put REPORT_CALLBACK_URL
 ```
 
-Optional secret for the web panel API:
-
-```bash
-npx wrangler secret put PANEL_TOKEN
-```
+The web panel is available without a separate panel token during active development.
+Report callback and Telegram webhook routes still use their own secrets.
 
 ## 3) Deploy
 

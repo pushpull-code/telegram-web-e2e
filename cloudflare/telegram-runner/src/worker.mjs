@@ -202,20 +202,7 @@ function panelRunKey(id) {
   return `${PANEL_RUN_PREFIX}${id}`;
 }
 
-function isPanelAuthorized(env, request) {
-  const expected = String(env.PANEL_TOKEN || "").trim();
-  if (!expected) {
-    return true;
-  }
-  const url = new URL(request.url);
-  const provided = String(request.headers.get("x-panel-token") || url.searchParams.get("token") || "").trim();
-  return provided === expected;
-}
-
-function requirePanelAuthorization(env, request) {
-  if (!isPanelAuthorized(env, request)) {
-    return jsonResponse({ error: "Нет доступа: неверный токен панели" }, 401);
-  }
+function requirePanelAuthorization() {
   return null;
 }
 
@@ -1134,8 +1121,6 @@ function panelHtml() {
   <div class="shell">
     <aside>
       <h1>Панель QA Telegram-ботов</h1>
-      <label for="panelToken">Токен панели</label>
-      <input id="panelToken" type="password" autocomplete="off" placeholder="можно оставить пустым">
       <label for="botUsername">Username бота</label>
       <input id="botUsername" autocomplete="off" placeholder="@example_bot">
       <label for="startPayload">Payload для /start</label>
@@ -1198,18 +1183,6 @@ function panelHtml() {
     const q = (selector) => document.querySelector(selector);
     const qa = (selector) => Array.from(document.querySelectorAll(selector));
 
-    function getToken() {
-      const fromInput = q("#panelToken").value.trim();
-      const fromStorage = localStorage.getItem("telegramQaPanelToken") || "";
-      const fromUrl = new URLSearchParams(location.search).get("token") || "";
-      return fromInput || fromStorage || fromUrl;
-    }
-
-    function setTokenFromUrl() {
-      const token = new URLSearchParams(location.search).get("token") || localStorage.getItem("telegramQaPanelToken") || "";
-      q("#panelToken").value = token;
-    }
-
     function escapeHtml(value) {
       return String(value || "").replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
@@ -1222,8 +1195,6 @@ function panelHtml() {
 
     async function api(path, options = {}) {
       const headers = Object.assign({ "content-type": "application/json" }, options.headers || {});
-      const token = getToken();
-      if (token) headers["x-panel-token"] = token;
       const response = await fetch(path, Object.assign({}, options, { headers }));
       const text = await response.text();
       let payload = {};
@@ -1449,8 +1420,6 @@ function panelHtml() {
 
     async function createRun(selectorOverride) {
       setMessage("");
-      const token = q("#panelToken").value.trim();
-      if (token) localStorage.setItem("telegramQaPanelToken", token);
       const body = {
         bot_username: q("#botUsername").value.trim(),
         start_payload: q("#startPayload").value.trim(),
@@ -1486,7 +1455,6 @@ function panelHtml() {
       q("#suite").value = "generated_scenarios";
       createRun(ids.join(",")).catch((error) => setMessage(error.message));
     });
-    setTokenFromUrl();
     loadRuns().catch((error) => setMessage(error.message));
     if (state.runId) loadRun().catch((error) => setMessage(error.message));
   </script>
