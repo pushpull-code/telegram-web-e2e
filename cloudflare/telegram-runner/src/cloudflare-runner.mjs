@@ -538,13 +538,189 @@ function draftFromNode(node, index) {
   };
 }
 
+function selectedDraftIds(selector) {
+  const normalized = String(selector || "").trim();
+  const lower = normalized.toLowerCase();
+  if (!lower || ["smart", "safe", "all-safe", "runnable", "dev", "unsafe"].includes(lower)) {
+    return [];
+  }
+  return normalized
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function draftMatchesSelectedId(draft, selectedId) {
+  const normalizedSelected = normalizeText(selectedId);
+  if (!normalizedSelected) {
+    return false;
+  }
+  const candidates = [
+    draft.id,
+    draft.node_id,
+    draft.scenario,
+    Array.isArray(draft.path) ? draft.path.join(">") : ""
+  ].map((value) => normalizeText(value));
+  return candidates.includes(normalizedSelected);
+}
+
+function collectWebappHandoffs(map) {
+  const byKey = new Map();
+  for (const node of map.nodes || []) {
+    const skippedButtons = Array.isArray(node.skippedButtons) ? node.skippedButtons : [];
+    for (const button of skippedButtons) {
+      if (button.skipReason !== "url_or_webapp_terminal" || !button.url) {
+        continue;
+      }
+      const key = [normalizeText(button.text), button.url].join("|");
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.source_nodes = unique([...(existing.source_nodes || []), node.id]);
+        existing.paths = [...(existing.paths || []), node.path || []];
+        continue;
+      }
+      byKey.set(key, {
+        node_id: node.id,
+        source_nodes: [node.id],
+        path: node.path || [],
+        paths: [node.path || []],
+        button_text: button.text || "",
+        button_type: button.type || "",
+        url: button.url,
+        recommended_engine: "cloudflare-browser-run",
+        status: "pending_browser_run"
+      });
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function webappAuditSchema() {
+  return {
+    type: "json_schema",
+    json_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        visible_text_summary: { type: "string" },
+        main_actions: { type: "array", items: { type: "string" } },
+        forms: { type: "array", items: { type: "string" } },
+        errors_or_blockers: { type: "array", items: { type: "string" } },
+        qa_notes: { type: "array", items: { type: "string" } }
+      },
+      required: ["title", "visible_text_summary", "main_actions", "forms", "errors_or_blockers", "qa_notes"]
+    }
+  };
+}
+
+async function auditSingleWebappHandoff(env, handoff) {
+  if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
+    return {
+      ...handoff,
+      status: "pending_browser_run",
+      browser_run: {
+        enabled: false,
+        reason: "BROWSER binding is not configured."
+      }
+    };
+  }
+
+  let url;
+  try {
+    url = new URL(String(handoff.url || "")).toString();
+  } catch (_) {
+    return {
+      ...handoff,
+      status: "browser_run_failed",
+      browser_run: {
+        enabled: true,
+        ok: false,
+        error: "Invalid WebApp/URL handoff URL."
+      }
+    };
+  }
+
+  const response = await env.BROWSER.quickAction("json", {
+    url,
+    prompt: [
+      "Проанализируй эту Telegram WebApp/URL страницу как QA.",
+      "Коротко верни назначение экрана, видимые основные действия, формы, ошибки/блокеры и что проверять дальше.",
+      "Если страница требует Telegram-контекст или авторизацию и поэтому не раскрылась, явно укажи это как blocker."
+    ].join(" "),
+    response_format: webappAuditSchema(),
+    gotoOptions: {
+      waitUntil: "networkidle2",
+      timeout: 20000
+    }
+  });
+  const browserMsUsed = response.headers.get("X-Browser-Ms-Used") || "";
+  const payload = await response.json().catch(async () => ({ raw: compactText(await response.text().catch(() => ""), 400) }));
+  if (!response.ok || payload?.success === false) {
+    throw new Error(`Browser Run json failed: ${response.status} ${JSON.stringify(payload).slice(0, 600)}`);
+  }
+  return {
+    ...handoff,
+    status: "browser_run_complete",
+    browser_run: {
+      enabled: true,
+      ok: true,
+      browser_ms_used: browserMsUsed,
+      result: payload?.result || payload
+    }
+  };
+}
+
+async function auditWebappHandoffs(env, handoffs, shouldStop) {
+  const maxAudits = clampNumber(env.BROWSER_RUN_MAX_WEBAPP_HANDOFFS, 3, 0, 8);
+  const results = [];
+  for (const [index, handoff] of handoffs.entries()) {
+    if (await shouldStop()) {
+      return { cancelled: true, handoffs: results };
+    }
+    if (index >= maxAudits) {
+      results.push({
+        ...handoff,
+        status: "limited_out",
+        browser_run: {
+          enabled: Boolean(env.BROWSER),
+          reason: `Skipped by BROWSER_RUN_MAX_WEBAPP_HANDOFFS=${maxAudits}.`
+        }
+      });
+      continue;
+    }
+    try {
+      results.push(await auditSingleWebappHandoff(env, handoff));
+    } catch (error) {
+      results.push({
+        ...handoff,
+        status: "browser_run_failed",
+        browser_run: {
+          enabled: Boolean(env.BROWSER),
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+  }
+  return { cancelled: false, handoffs: results };
+}
+
 function buildGeneratedSuite(map, run) {
   const allDrafts = map.nodes.map(draftFromNode);
-  const selector = String(run.selector || "smart").trim().toLowerCase();
+  const rawSelector = String(run.selector || "smart").trim() || "smart";
+  const selector = rawSelector.toLowerCase();
   const maxDrafts = clampNumber(run.max_drafts, 8, 1, 50);
-  const drafts = selector && selector !== "all-safe" && selector !== "runnable" && selector !== "dev"
-    ? allDrafts.slice(0, maxDrafts)
+  const selectedIds = selectedDraftIds(rawSelector);
+  const selectedDrafts = selectedIds.length
+    ? allDrafts.filter((draft) => selectedIds.some((selectedId) => draftMatchesSelectedId(draft, selectedId)))
+    : [];
+  const drafts = selectedIds.length
+    ? selectedDrafts
     : allDrafts.slice(0, selector === "dev" ? Math.min(20, maxDrafts) : maxDrafts);
+  const missingSelectedIds = selectedIds.filter(
+    (selectedId) => !selectedDrafts.some((draft) => draftMatchesSelectedId(draft, selectedId))
+  );
+  const webappHandoffs = collectWebappHandoffs(map);
   const failed = drafts.filter((draft) => draft.status === "failed").length;
 
   return {
@@ -555,6 +731,7 @@ function buildGeneratedSuite(map, run) {
       "bot-map.enriched.json",
       "generated-test-plan.json",
       "generated-scenarios.json",
+      ...(webappHandoffs.length ? ["webapp-handoffs.json"] : []),
       "cloudflare-mtproto-report.json"
     ],
     summary: {
@@ -570,8 +747,13 @@ function buildGeneratedSuite(map, run) {
       selected: drafts.length,
       manual: map.nodes.reduce((count, node) => count + (node.skippedButtons || []).length, 0),
       runnableTestAccount: drafts.length,
-      limitedOut: Math.max(0, allDrafts.length - drafts.length)
+      limitedOut: selectedIds.length ? 0 : Math.max(0, allDrafts.length - drafts.length),
+      webappHandoffs: webappHandoffs.length
     },
+    selector: rawSelector,
+    selected_ids: selectedIds,
+    missing_selected_ids: missingSelectedIds,
+    webapp_handoffs: webappHandoffs,
     draft_count: drafts.length,
     drafts,
     bot_map: map
@@ -692,6 +874,7 @@ async function aiReview(env, map, suite) {
             "You are a senior QA analyst for Telegram bots.",
             "Return only valid compact json. Do not include markdown, prose, code fences, or comments.",
             "Keep each string under 180 characters, arrays under 5 items, and avoid long paragraphs.",
+            "Use webapp_handoffs as evidence for URL/WebApp branches. If Browser Run could not inspect a handoff, mark it as missing evidence.",
             "Use this json shape exactly:",
             '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
           ].join(" ")
@@ -734,6 +917,8 @@ async function aiReview(env, map, suite) {
             generatedSuite: {
               summary: suite.summary,
               coverage: suite.coverage,
+              webapp_handoffs: suite.webapp_handoffs,
+              missing_selected_ids: suite.missing_selected_ids,
               drafts: (suite.drafts || []).map((draft) => ({
                 id: draft.id,
                 status: draft.status,
@@ -814,6 +999,23 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
   }
 
   const generatedSuite = buildGeneratedSuite(discovery.map, run);
+  const auditedWebapps = await auditWebappHandoffs(env, generatedSuite.webapp_handoffs || [], shouldStop);
+  if (auditedWebapps.cancelled) {
+    return {
+      status: "cancelled",
+      completed_at: nowIso(),
+      duration_sec: Math.round((Date.now() - startedAt) / 1000),
+      cloudflare_run: {
+        runner: "cloudflare-mtproto",
+        cancelled: true
+      }
+    };
+  }
+  generatedSuite.webapp_handoffs = auditedWebapps.handoffs;
+  generatedSuite.coverage = {
+    ...generatedSuite.coverage,
+    webappHandoffsAudited: auditedWebapps.handoffs.filter((handoff) => handoff.status === "browser_run_complete").length
+  };
   const generatedSuiteAiReview = await aiReview(env, discovery.map, generatedSuite);
   return {
     status: generatedSuite.summary.failed > 0 ? "failure" : "success",

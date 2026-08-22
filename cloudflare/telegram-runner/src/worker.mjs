@@ -525,6 +525,8 @@ function generatedSuiteLabel(lang, key) {
       manual: "manual",
       testAccount: "test-account",
       limitedOut: "\u043d\u0435 \u0432\u043e\u0448\u043b\u043e \u0438\u0437-\u0437\u0430 \u043b\u0438\u043c\u0438\u0442\u0430",
+      webappHandoffs: "WebApp/URL",
+      webappHandoffsAudited: "WebApp проверено",
       more: "\u0435\u0449\u0435",
       branches: "\u0432\u0435\u0442\u043e\u043a"
     },
@@ -544,6 +546,8 @@ function generatedSuiteLabel(lang, key) {
       manual: "manual",
       testAccount: "test-account",
       limitedOut: "limited out",
+      webappHandoffs: "WebApp/URL",
+      webappHandoffsAudited: "WebApp audited",
       more: "more",
       branches: "branches"
     }
@@ -611,6 +615,12 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
       `${generatedSuiteLabel(lang, "manual")}: ${numberOrZero(coverage.manual)}`,
       `${generatedSuiteLabel(lang, "testAccount")}: ${numberOrZero(coverage.runnableTestAccount)}`
     ];
+    if (numberOrZero(coverage.webappHandoffs) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "webappHandoffs")}: ${numberOrZero(coverage.webappHandoffs)}`);
+    }
+    if (numberOrZero(coverage.webappHandoffsAudited) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "webappHandoffsAudited")}: ${numberOrZero(coverage.webappHandoffsAudited)}`);
+    }
     if (numberOrZero(coverage.limitedOut) > 0) {
       coverageParts.push(`${generatedSuiteLabel(lang, "limitedOut")}: ${numberOrZero(coverage.limitedOut)}`);
     }
@@ -1584,8 +1594,8 @@ function panelHtml() {
     function statusKind(value) {
       const text = String(value || "").toLowerCase();
       if (text === "success" || text === "completed" || text === "passed" || text === "pass") return "ok";
-      if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high") return "bad";
-      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "cancel_requested" || text === "warning" || text === "medium") return "warn";
+      if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high" || text === "browser_run_failed") return "bad";
+      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "cancel_requested" || text === "warning" || text === "medium" || text === "pending_browser_run" || text === "limited_out") return "warn";
       return "";
     }
 
@@ -1623,6 +1633,10 @@ function panelHtml() {
         warning: "предупреждение",
         flaky: "нестабильно",
         not_run: "не запускалось",
+        pending_browser_run: "ждёт Browser Run",
+        browser_run_complete: "Browser Run готов",
+        browser_run_failed: "Browser Run ошибка",
+        limited_out: "не вошло в лимит",
         unknown: "неизвестно",
         low: "низкий",
         medium: "средний",
@@ -1719,26 +1733,36 @@ function panelHtml() {
       if (Array.isArray(suite.source_artifacts)) {
         suite.source_artifacts.forEach((name) => docs.push(name));
       }
-      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
+      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
         if (!docs.includes(name)) docs.push(name);
       });
       return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
           suite.report_file === name || ai.report_file === name ||
-          (name === "bot-map.json" && (suite.bot_map || run.bot_map));
+          (name === "bot-map.json" && (suite.bot_map || run.bot_map)) ||
+          (name === "webapp-handoffs.json" && Array.isArray(suite.webapp_handoffs) && suite.webapp_handoffs.length > 0);
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
           '<span class="mono">' + escapeHtml(name) + '</span></div>';
       }).join("") + '</div>';
     }
 
     function renderBranches(run) {
+      const suite = run.generated_suite || {};
       const drafts = run.drafts || [];
+      const selectedIds = Array.isArray(suite.selected_ids) ? suite.selected_ids : [];
+      const missingIds = Array.isArray(suite.missing_selected_ids) ? suite.missing_selected_ids : [];
       const reviews = Array.isArray((run.generated_suite_ai_review || {}).branch_reviews)
         ? run.generated_suite_ai_review.branch_reviews
         : [];
       const reviewByDraft = new Map(reviews.map((review) => [String(review.draft_id || ""), review]));
       if (!drafts.length) return '<h2>Ветки</h2><div class="muted">Сгенерированных веток пока нет. Дождись discovery/extraction.</div>';
-      return '<h2>Ветки</h2>' + drafts.map((draft) => {
+      const selectorHtml = selectedIds.length || missingIds.length
+        ? '<div class="item"><b>Явный выбор</b><pre>' + escapeHtml([
+            selectedIds.length ? "выбрано: " + selectedIds.join(", ") : "",
+            missingIds.length ? "не найдено: " + missingIds.join(", ") : ""
+          ].filter(Boolean).join("\\n")) + '</pre></div>'
+        : "";
+      return '<h2>Ветки</h2>' + selectorHtml + drafts.map((draft) => {
         const review = reviewByDraft.get(String(draft.id || "")) || {};
         const meta = [
           uiLabel(draft.status),
@@ -1763,6 +1787,7 @@ function panelHtml() {
       const map = suite.bot_map || run.bot_map || {};
       const flows = Array.isArray(review.flow_map) ? review.flow_map : [];
       const nodes = Array.isArray(map.nodes) ? map.nodes : [];
+      const webapps = Array.isArray(suite.webapp_handoffs) ? suite.webapp_handoffs : [];
       const flowHtml = flows.length ? flows.map((flow) => {
         const branches = Array.isArray(flow.branches) ? flow.branches : [];
         return '<div class="item"><b>' + escapeHtml(flow.name || "flow") + '</b> ' +
@@ -1785,16 +1810,49 @@ function panelHtml() {
           (skipped.length ? '<div class="muted">Пропущено: ' + escapeHtml(skipped.map((button) => String(button.text || "") + " (" + String(button.skipReason || "") + ")").join(" | ")) + '</div>' : '') +
           '</div>';
       }).join("") : '<div class="muted">Точная MTProto-карта пока не создана.</div>';
-      return '<h2>Дерево логики</h2>' + flowHtml + rawHtml;
+      const webappHtml = webapps.length ? '<h2>WebApp/URL handoff-и</h2>' + webapps.map((handoff) => {
+        const path = Array.isArray(handoff.path) && handoff.path.length ? handoff.path.join(" → ") : "/start";
+        const browser = handoff.browser_run || {};
+        const result = browser.result || {};
+        return '<div class="item"><b>' + escapeHtml(handoff.button_text || "URL/WebApp") + '</b> ' +
+          pill(handoff.status || "pending_browser_run", statusKind(handoff.status)) +
+          '<div class="muted">' + escapeHtml(path) + '</div>' +
+          '<div class="mono">' + escapeHtml(handoff.url || "") + '</div>' +
+          (result.title || result.visible_text_summary ? '<pre>' + escapeHtml([
+            result.title ? "title: " + result.title : "",
+            result.visible_text_summary ? "summary: " + result.visible_text_summary : "",
+            Array.isArray(result.main_actions) && result.main_actions.length ? "actions: " + result.main_actions.join(" | ") : "",
+            Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "blockers: " + result.errors_or_blockers.join(" | ") : ""
+          ].filter(Boolean).join("\\n")) + '</pre>' : '') +
+          (browser.error ? '<div class="error">' + escapeHtml(browser.error) + '</div>' : '') +
+          '</div>';
+      }).join("") : '<h2>WebApp/URL handoff-и</h2><div class="muted">WebApp/URL переходов пока не найдено.</div>';
+      return '<h2>Дерево логики</h2>' + flowHtml + rawHtml + webappHtml;
     }
 
     function renderAi(run) {
       const review = run.generated_suite_ai_review || {};
+      const suite = run.generated_suite || {};
       const aiMeta = review.ai || {};
       const overview = review.overview || {};
       const defects = Array.isArray(review.defects) ? review.defects : [];
       const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
       const next = review.next_run || {};
+      const webapps = Array.isArray(suite.webapp_handoffs) ? suite.webapp_handoffs : [];
+      const webappHtml = webapps.length ? webapps.map((handoff) => {
+        const browser = handoff.browser_run || {};
+        const result = browser.result || {};
+        const notes = [
+          result.visible_text_summary,
+          Array.isArray(result.qa_notes) && result.qa_notes.length ? result.qa_notes.join(" | ") : "",
+          Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "Блокеры: " + result.errors_or_blockers.join(" | ") : "",
+          browser.error ? "Ошибка: " + browser.error : ""
+        ].filter(Boolean).join("\\n");
+        return '<div class="item">' + pill(handoff.status || "pending_browser_run", statusKind(handoff.status)) +
+          '<b>' + escapeHtml(handoff.button_text || "WebApp/URL") + '</b>' +
+          '<div class="muted mono">' + escapeHtml(handoff.url || "") + '</div>' +
+          '<pre>' + escapeHtml(notes || "Browser Run ещё не дал данных по этому переходу.") + '</pre></div>';
+      }).join("") : '<div class="muted">WebApp/URL переходов пока нет.</div>';
       return '<h2>AI-разбор</h2>' +
         '<div class="item"><b>Статус AI</b><pre>' + escapeHtml([
           "enabled: " + Boolean(aiMeta.enabled),
@@ -1810,6 +1868,7 @@ function panelHtml() {
             '</div><div>' + escapeHtml(item.next_check || "") + '</div></div>';
         }).join("") : '<div class="muted">Дефектов в callback пока нет.</div>') + '</div>' +
         '<div class="item"><b>Пробелы покрытия</b><pre>' + escapeHtml(gaps.join("\\n") || "Пробелов пока нет.") + '</pre></div>' +
+        '<div class="item"><b>WebApp/URL</b>' + webappHtml + '</div>' +
         '<div class="item"><b>Следующий прогон</b><pre>' + escapeHtml(JSON.stringify(next, null, 2)) + '</pre></div>';
     }
 
