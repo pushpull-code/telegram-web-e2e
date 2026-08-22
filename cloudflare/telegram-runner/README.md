@@ -58,6 +58,15 @@ npm install
 npm run deploy
 ```
 
+Во время активной разработки деплой должен идти через GitHub Actions: push в `main` запускает `.github/workflows/deploy-telegram-runner-worker.yml` и выполняет `wrangler deploy`.
+
+Для автодеплоя в GitHub secrets нужны:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+Локальный `wrangler login` подходит для ручной проверки, но не заменяет `CLOUDFLARE_API_TOKEN` в CI.
+
 ## 4) Set Telegram webhook
 
 Replace `<worker-url>` and run:
@@ -86,23 +95,23 @@ Workflow `telegram-web-e2e.yml` (updated in this repo) will send callback payloa
 
 For `generated_scenarios`, the worker adds a short branch-check block to the Telegram report: total drafts, passed/flaky/failed/not-run counts, and one compact line per generated branch.
 
-## Web panel
+## Web panel / Веб-панель
 
-Open:
+Открыть:
 
 ```text
 https://<worker-url>/panel
 ```
 
-The panel can:
+Панель умеет:
 
-- start a GitHub Actions run by bot username and optional `/start` payload;
-- show live GitHub job/step progress;
-- show generated documents expected from the run;
-- show compact bot logic branches from `generated-scenario-suite-report.json`;
-- rerun one or several selected generated branches.
+- запускать GitHub Actions прогон по username бота и опциональному `/start` payload;
+- показывать live-прогресс GitHub jobs/steps;
+- показывать документы, которые создаются во время прогона;
+- показывать компактное дерево логики из `generated-scenario-suite-report.json`;
+- перезапускать одну или несколько выбранных веток.
 
-Recommended mode for a first pass:
+Рекомендуемый режим для первого прохода:
 
 ```text
 suite: generated_scenarios
@@ -110,7 +119,7 @@ selector: smart
 max drafts: 8
 ```
 
-For a dedicated dev/test bot, use selector `dev`: it allows deeper/state-changing branch discovery according to workflow safety settings.
+Для отдельного dev/test бота используй selector `dev`: он разрешает более глубокий проход и state-changing ветки согласно safety-настройкам workflow.
 
 ## Telegram commands
 

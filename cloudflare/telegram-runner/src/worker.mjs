@@ -214,7 +214,7 @@ function isPanelAuthorized(env, request) {
 
 function requirePanelAuthorization(env, request) {
   if (!isPanelAuthorized(env, request)) {
-    return jsonResponse({ error: "Unauthorized" }, 401);
+    return jsonResponse({ error: "Нет доступа: неверный токен панели" }, 401);
   }
   return null;
 }
@@ -981,11 +981,11 @@ async function fetchGithubRunDetails(env, runId) {
 
 function panelHtml() {
   return `<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram Bot QA Panel</title>
+  <title>Панель QA Telegram-ботов</title>
   <style>
     :root {
       color-scheme: light;
@@ -1133,64 +1133,64 @@ function panelHtml() {
 <body>
   <div class="shell">
     <aside>
-      <h1>Telegram Bot QA Panel</h1>
-      <label for="panelToken">Panel token</label>
-      <input id="panelToken" type="password" autocomplete="off" placeholder="optional if PANEL_TOKEN is empty">
-      <label for="botUsername">Bot username</label>
+      <h1>Панель QA Telegram-ботов</h1>
+      <label for="panelToken">Токен панели</label>
+      <input id="panelToken" type="password" autocomplete="off" placeholder="можно оставить пустым">
+      <label for="botUsername">Username бота</label>
       <input id="botUsername" autocomplete="off" placeholder="@example_bot">
-      <label for="startPayload">Start payload</label>
-      <input id="startPayload" autocomplete="off" placeholder="optional">
+      <label for="startPayload">Payload для /start</label>
+      <input id="startPayload" autocomplete="off" placeholder="необязательно">
       <div class="row">
         <div style="flex:1">
-          <label for="suite">Mode</label>
+          <label for="suite">Режим</label>
           <select id="suite">
-            <option value="generated_scenarios">Map + AI + test branches</option>
-            <option value="discover_mtproto">Map only</option>
+            <option value="generated_scenarios">Карта + AI + тест веток</option>
+            <option value="discover_mtproto">Только карта</option>
           </select>
         </div>
         <div style="width:120px">
-          <label for="maxDrafts">Max</label>
+          <label for="maxDrafts">Лимит</label>
           <input id="maxDrafts" type="number" min="1" max="50" value="8">
         </div>
       </div>
-      <label for="selector">Branch selector</label>
+      <label for="selector">Выбор веток</label>
       <select id="selector">
-        <option value="smart">smart</option>
-        <option value="safe">safe</option>
-        <option value="all-safe">all-safe</option>
-        <option value="runnable">runnable</option>
-        <option value="dev">dev / test bot</option>
+        <option value="smart">умный выбор</option>
+        <option value="safe">только безопасные</option>
+        <option value="all-safe">все безопасные</option>
+        <option value="runnable">все исполняемые</option>
+        <option value="dev">dev/test бот</option>
       </select>
       <div class="row" style="margin-top:14px">
-        <button id="startRun">Start</button>
-        <button id="refresh" class="secondary">Refresh</button>
+        <button id="startRun">Запустить</button>
+        <button id="refresh" class="secondary">Обновить</button>
       </div>
       <div class="section" style="margin-top:16px">
-        <h2>Recent runs</h2>
-        <div id="runList" class="list muted">Loading...</div>
+        <h2>Последние прогоны</h2>
+        <div id="runList" class="list muted">Загрузка...</div>
       </div>
     </aside>
     <main>
       <div class="topbar">
         <div>
-          <h1 id="runTitle">No run selected</h1>
-          <div id="runMeta" class="muted">Create a run or choose one from the left.</div>
+          <h1 id="runTitle">Прогон не выбран</h1>
+          <div id="runMeta" class="muted">Создай новый прогон или выбери существующий слева.</div>
         </div>
-        <button id="runSelected" class="inline secondary">Run selected</button>
+        <button id="runSelected" class="inline secondary">Запустить выбранное</button>
       </div>
       <div class="tabs">
-        <button class="tab active" data-tab="progress">Progress</button>
-        <button class="tab" data-tab="documents">Documents</button>
-        <button class="tab" data-tab="tree">Logic tree</button>
-        <button class="tab" data-tab="branches">Branches</button>
-        <button class="tab" data-tab="ai">AI review</button>
+        <button class="tab active" data-tab="progress">Прогресс</button>
+        <button class="tab" data-tab="documents">Документы</button>
+        <button class="tab" data-tab="tree">Дерево логики</button>
+        <button class="tab" data-tab="branches">Ветки</button>
+        <button class="tab" data-tab="ai">AI-разбор</button>
       </div>
       <div id="message" class="error"></div>
-      <section id="tab-progress" class="section"><h2>Progress</h2><div class="muted">No run selected.</div></section>
-      <section id="tab-documents" class="section" hidden><h2>Documents</h2><div class="muted">No run selected.</div></section>
-      <section id="tab-tree" class="section" hidden><h2>Logic tree</h2><div class="muted">No run selected.</div></section>
-      <section id="tab-branches" class="section" hidden><h2>Branches</h2><div class="muted">No run selected.</div></section>
-      <section id="tab-ai" class="section" hidden><h2>AI review</h2><div class="muted">No run selected.</div></section>
+      <section id="tab-progress" class="section"><h2>Прогресс</h2><div class="muted">Прогон не выбран.</div></section>
+      <section id="tab-documents" class="section" hidden><h2>Документы</h2><div class="muted">Прогон не выбран.</div></section>
+      <section id="tab-tree" class="section" hidden><h2>Дерево логики</h2><div class="muted">Прогон не выбран.</div></section>
+      <section id="tab-branches" class="section" hidden><h2>Ветки</h2><div class="muted">Прогон не выбран.</div></section>
+      <section id="tab-ai" class="section" hidden><h2>AI-разбор</h2><div class="muted">Прогон не выбран.</div></section>
     </main>
   </div>
   <script>
@@ -1233,15 +1233,55 @@ function panelHtml() {
     }
 
     function pill(text, kind) {
-      return '<span class="pill ' + (kind || "") + '">' + escapeHtml(text) + '</span>';
+      return '<span class="pill ' + (kind || "") + '">' + escapeHtml(uiLabel(text)) + '</span>';
     }
 
     function statusKind(value) {
       const text = String(value || "").toLowerCase();
-      if (text === "success" || text === "completed") return "ok";
-      if (text === "failure" || text === "cancelled" || text === "timed_out") return "bad";
-      if (text === "queued" || text === "running" || text === "in_progress") return "warn";
+      if (text === "success" || text === "completed" || text === "passed" || text === "pass") return "ok";
+      if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high") return "bad";
+      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "warning" || text === "medium") return "warn";
       return "";
+    }
+
+    function uiLabel(value) {
+      const text = String(value || "");
+      const labels = {
+        generated_scenarios: "карта + AI + тест веток",
+        discover_mtproto: "только карта",
+        smart: "умный выбор",
+        safe: "безопасные",
+        "all-safe": "все безопасные",
+        runnable: "исполняемые",
+        dev: "dev/test",
+        queued: "в очереди",
+        requested: "запрошен",
+        waiting: "ожидание",
+        pending: "ожидание",
+        running: "выполняется",
+        in_progress: "выполняется",
+        completed: "завершён",
+        success: "успешно",
+        failure: "ошибка",
+        failed: "ошибка",
+        cancelled: "отменён",
+        timed_out: "таймаут",
+        passed: "прошло",
+        pass: "прошло",
+        warning: "предупреждение",
+        flaky: "нестабильно",
+        not_run: "не запускалось",
+        unknown: "неизвестно",
+        low: "низкий",
+        medium: "средний",
+        high: "высокий",
+        critical: "критичный",
+        created: "создан",
+        expected: "ожидается",
+        branch: "ветка",
+        new: "новая"
+      };
+      return labels[text.toLowerCase()] || text;
     }
 
     function setMessage(text) {
@@ -1253,9 +1293,9 @@ function panelHtml() {
       const runs = payload.runs || [];
       q("#runList").innerHTML = runs.length ? runs.map((run) => {
         return '<div class="run-row"><div><b>' + escapeHtml(run.bot_username || run.id) + '</b><div class="muted mono">' +
-          escapeHtml((run.status || "queued") + " · " + (run.created_at || "")) +
-          '</div></div><button class="inline secondary" data-open-run="' + escapeHtml(run.id) + '">Open</button></div>';
-      }).join("") : '<div class="muted">No runs yet.</div>';
+          escapeHtml(uiLabel(run.status || "queued") + " · " + (run.created_at || "")) +
+          '</div></div><button class="inline secondary" data-open-run="' + escapeHtml(run.id) + '">Открыть</button></div>';
+      }).join("") : '<div class="muted">Прогонов пока нет.</div>';
       qa("[data-open-run]").forEach((button) => {
         button.addEventListener("click", () => {
           state.runId = button.getAttribute("data-open-run") || "";
@@ -1267,7 +1307,7 @@ function panelHtml() {
 
     function renderJobs(github) {
       const jobs = github && Array.isArray(github.jobs) ? github.jobs : [];
-      if (!jobs.length) return '<div class="muted">GitHub job details are not available yet.</div>';
+      if (!jobs.length) return '<div class="muted">Детали GitHub jobs пока недоступны.</div>';
       return jobs.map((job) => {
         const steps = Array.isArray(job.steps) ? job.steps : [];
         return '<div class="item"><b>' + escapeHtml(job.name || "job") + '</b> ' +
@@ -1275,7 +1315,7 @@ function panelHtml() {
           (job.conclusion ? pill(job.conclusion, statusKind(job.conclusion)) : "") +
           '<div class="steps">' + steps.map((step) => {
             return '<div class="step"><span class="mono">' + escapeHtml(step.number || "") + '</span><span>' +
-              escapeHtml(step.name || "") + '</span><span>' + escapeHtml(step.conclusion || step.status || "") + '</span></div>';
+              escapeHtml(step.name || "") + '</span><span>' + escapeHtml(uiLabel(step.conclusion || step.status || "")) + '</span></div>';
           }).join("") + '</div></div>';
       }).join("");
     }
@@ -1290,7 +1330,7 @@ function panelHtml() {
       ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
         if (!docs.includes(name)) docs.push(name);
       });
-      return '<h2>Documents</h2><div class="list">' + docs.map((name) => {
+      return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
           suite.report_file === name || ai.report_file === name;
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
@@ -1304,20 +1344,20 @@ function panelHtml() {
         ? run.generated_suite_ai_review.branch_reviews
         : [];
       const reviewByDraft = new Map(reviews.map((review) => [String(review.draft_id || ""), review]));
-      if (!drafts.length) return '<h2>Branches</h2><div class="muted">No generated branches yet. Wait for discovery/extraction.</div>';
-      return '<h2>Branches</h2>' + drafts.map((draft) => {
+      if (!drafts.length) return '<h2>Ветки</h2><div class="muted">Сгенерированных веток пока нет. Дождись discovery/extraction.</div>';
+      return '<h2>Ветки</h2>' + drafts.map((draft) => {
         const review = reviewByDraft.get(String(draft.id || "")) || {};
         const meta = [
-          draft.status,
+          uiLabel(draft.status),
           draft.source_type,
           draft.ai_severity,
-          draft.step_count ? (draft.passed_steps + "/" + draft.step_count + " steps") : ""
+          draft.step_count ? (draft.passed_steps + "/" + draft.step_count + " шагов") : ""
         ].filter(Boolean).join(" · ");
         return '<label class="branch"><input type="checkbox" value="' + escapeHtml(draft.id) + '">' +
           '<div><b class="mono">' + escapeHtml(draft.id) + '</b><div>' + escapeHtml(draft.scenario || "") +
           '</div><div class="muted">' + escapeHtml(meta) + '</div>' +
-          (review.intended_behavior ? '<div><b>Expected:</b> ' + escapeHtml(review.intended_behavior) + '</div>' : '') +
-          (review.observed_behavior ? '<div><b>Observed:</b> ' + escapeHtml(review.observed_behavior) + '</div>' : '') +
+          (review.intended_behavior ? '<div><b>Ожидание:</b> ' + escapeHtml(review.intended_behavior) + '</div>' : '') +
+          (review.observed_behavior ? '<div><b>Факт:</b> ' + escapeHtml(review.observed_behavior) + '</div>' : '') +
           (Array.isArray(review.defects) && review.defects.length ? '<div class="error">' + escapeHtml(review.defects.join(" | ")) + '</div>' : '') +
           (draft.first_error ? '<div class="error">' + escapeHtml(draft.first_error) + '</div>' : '') +
           '</div>' + pill(draft.status || "new", statusKind(draft.status)) + '</label>';
@@ -1328,17 +1368,17 @@ function panelHtml() {
       const review = run.generated_suite_ai_review || {};
       const flows = Array.isArray(review.flow_map) ? review.flow_map : [];
       if (!flows.length) {
-        return '<h2>Logic tree</h2><div class="muted">AI flow map is not available yet. Showing generated branches.</div>' +
+        return '<h2>Дерево логики</h2><div class="muted">AI-карта flow пока недоступна. Показываю сгенерированные ветки.</div>' +
           renderBranches(run);
       }
-      return '<h2>Logic tree</h2>' + flows.map((flow) => {
+      return '<h2>Дерево логики</h2>' + flows.map((flow) => {
         const branches = Array.isArray(flow.branches) ? flow.branches : [];
         return '<div class="item"><b>' + escapeHtml(flow.name || "flow") + '</b> ' +
           pill(flow.criticality || "medium", statusKind(flow.criticality)) +
           '<div>' + escapeHtml(flow.purpose || "") + '</div>' +
           '<div class="steps">' + branches.map((branch, index) => {
             return '<div class="step"><span class="mono">' + escapeHtml(index + 1) + '</span><span>' +
-              escapeHtml(branch) + '</span><span>branch</span></div>';
+              escapeHtml(branch) + '</span><span>ветка</span></div>';
           }).join("") + '</div></div>';
       }).join("");
     }
@@ -1349,16 +1389,16 @@ function panelHtml() {
       const defects = Array.isArray(review.defects) ? review.defects : [];
       const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
       const next = review.next_run || {};
-      return '<h2>AI review</h2>' +
-        '<div class="item"><b>Overview</b><p>' + escapeHtml(overview.summary || "No AI review yet.") + '</p>' +
+      return '<h2>AI-разбор</h2>' +
+        '<div class="item"><b>Общий взгляд</b><p>' + escapeHtml(overview.summary || "AI-разбора пока нет.") + '</p>' +
         '<div class="muted">' + escapeHtml(overview.product_purpose || "") + '</div></div>' +
-        '<div class="item"><b>Defects</b>' + (defects.length ? defects.map((item) => {
+        '<div class="item"><b>Дефекты</b>' + (defects.length ? defects.map((item) => {
           return '<div class="item">' + pill(item.severity || "unknown", statusKind(item.severity)) +
             '<b>' + escapeHtml(item.title || "") + '</b><div class="muted">' + escapeHtml((item.evidence || []).join(" | ")) +
             '</div><div>' + escapeHtml(item.next_check || "") + '</div></div>';
-        }).join("") : '<div class="muted">No defects in callback payload yet.</div>') + '</div>' +
-        '<div class="item"><b>Coverage gaps</b><pre>' + escapeHtml(gaps.join("\\n") || "No gaps yet.") + '</pre></div>' +
-        '<div class="item"><b>Next run</b><pre>' + escapeHtml(JSON.stringify(next, null, 2)) + '</pre></div>';
+        }).join("") : '<div class="muted">Дефектов в callback пока нет.</div>') + '</div>' +
+        '<div class="item"><b>Пробелы покрытия</b><pre>' + escapeHtml(gaps.join("\\n") || "Пробелов пока нет.") + '</pre></div>' +
+        '<div class="item"><b>Следующий прогон</b><pre>' + escapeHtml(JSON.stringify(next, null, 2)) + '</pre></div>';
     }
 
     function renderRun(payload) {
@@ -1366,20 +1406,20 @@ function panelHtml() {
       const github = run.github_live || run.github || {};
       const status = github.conclusion || github.status || run.status || "queued";
       const bot = run.bot_username || "";
-      q("#runTitle").textContent = bot ? bot + " · " + status : run.id || "Run";
+      q("#runTitle").textContent = bot ? bot + " · " + uiLabel(status) : run.id || "Прогон";
       q("#runMeta").innerHTML = [
         pill(run.suite || "generated_scenarios"),
         pill(run.selector || "smart"),
         pill(status, statusKind(status)),
-        github.html_url ? '<a href="' + escapeHtml(github.html_url) + '" target="_blank" rel="noreferrer">GitHub run</a>' : ''
+        github.html_url ? '<a href="' + escapeHtml(github.html_url) + '" target="_blank" rel="noreferrer">Прогон в GitHub</a>' : ''
       ].join(" ");
-      q("#tab-progress").innerHTML = '<h2>Progress</h2><div>' +
+      q("#tab-progress").innerHTML = '<h2>Прогресс</h2><div>' +
         pill(run.status || "queued", statusKind(run.status)) +
-        (run.github_run_id ? pill("run " + run.github_run_id) : "") +
-        '</div><div class="item"><b>Events</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
+        (run.github_run_id ? pill("прогон " + run.github_run_id) : "") +
+        '</div><div class="item"><b>События</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
           return '<div class="item"><span class="mono">' + escapeHtml(event.time || "") + '</span> ' +
-            escapeHtml([event.phase, event.status, event.message].filter(Boolean).join(" · ")) + '</div>';
-        }).join("") : '<div class="muted">No events yet.</div>') + '</div>' + renderJobs(github);
+            escapeHtml([event.phase, uiLabel(event.status), event.message].filter(Boolean).join(" · ")) + '</div>';
+        }).join("") : '<div class="muted">Событий пока нет.</div>') + '</div>' + renderJobs(github);
       q("#tab-documents").innerHTML = renderDocuments(run);
       q("#tab-tree").innerHTML = renderLogicTree(run);
       q("#tab-branches").innerHTML = renderBranches(run);
@@ -1440,7 +1480,7 @@ function panelHtml() {
     q("#runSelected").addEventListener("click", () => {
       const ids = qa('#tab-branches input[type="checkbox"]:checked').map((input) => input.value).filter(Boolean);
       if (!ids.length) {
-        setMessage("Select at least one branch.");
+        setMessage("Выбери хотя бы одну ветку.");
         return;
       }
       q("#suite").value = "generated_scenarios";
@@ -1464,18 +1504,18 @@ async function handlePanelRunCreate(env, request) {
     return authResponse;
   }
   if (!env.BOT_STATE_KV) {
-    return jsonResponse({ error: "BOT_STATE_KV binding is required" }, 500);
+    return jsonResponse({ error: "Не настроено хранилище BOT_STATE_KV" }, 500);
   }
 
   const body = await request.json().catch(() => ({}));
   const botUsername = normalizeBotUsername(body.bot_username);
   if (!botUsername) {
-    return jsonResponse({ error: "Valid bot_username is required" }, 400);
+    return jsonResponse({ error: "Укажи корректный username бота" }, 400);
   }
 
   const suite = normalizeSuite(body.suite, "generated_scenarios");
   if (!["generated_scenarios", "discover_mtproto"].includes(suite)) {
-    return jsonResponse({ error: "Panel supports generated_scenarios and discover_mtproto only" }, 400);
+    return jsonResponse({ error: "Панель поддерживает только generated_scenarios и discover_mtproto" }, 400);
   }
   const selector = suite === "generated_scenarios" ? String(body.selector || "smart").trim() || "smart" : "";
   const maxDrafts = clampNumber(body.max_drafts, 8, 1, 50);
@@ -1494,7 +1534,7 @@ async function handlePanelRunCreate(env, request) {
       created_at: createdAt,
       updated_at: createdAt
     },
-    { phase: "created", status: "queued", message: "Panel run created" }
+    { phase: "создание", status: "queued", message: "Прогон создан из панели" }
   );
   await savePanelRun(env, run);
 
@@ -1519,7 +1559,7 @@ async function handlePanelRunCreate(env, request) {
         github_run_url: dispatch.runUrl,
         updated_at: nowIso()
       },
-      { phase: "github", status: dispatch.status || "requested", message: "GitHub Actions run dispatched" }
+      { phase: "github", status: dispatch.status || "requested", message: "Прогон GitHub Actions запущен" }
     );
     await savePanelRun(env, run);
     return jsonResponse({ run });
@@ -1553,7 +1593,7 @@ async function handlePanelRunGet(env, request, id) {
   }
   const run = await loadPanelRun(env, id);
   if (!run) {
-    return jsonResponse({ error: "Run not found" }, 404);
+    return jsonResponse({ error: "Прогон не найден" }, 404);
   }
   const responseRun = {
     ...run,
@@ -1603,7 +1643,7 @@ async function updatePanelRunFromReport(env, payload) {
   next = appendPanelEvent(next, {
     phase,
     status,
-    message: payload.failure_message || (payload.generated_suite ? "Generated suite received" : "Callback received")
+    message: payload.failure_message || (payload.generated_suite ? "Получен отчёт по веткам" : "Получен callback")
   });
   await savePanelRun(env, next);
 }
