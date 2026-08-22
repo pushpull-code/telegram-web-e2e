@@ -17,12 +17,21 @@ export type MtprotoButton = {
   inlineQuery?: string;
 };
 
+export type MtprotoLink = {
+  text: string;
+  url: string;
+  type: string;
+  offset?: number;
+  length?: number;
+};
+
 export type MtprotoMessage = {
   id: number;
   date: number | null;
   dateIso: string | null;
   outgoing: boolean;
   text: string;
+  links?: MtprotoLink[];
   buttons: MtprotoButton[][];
 };
 

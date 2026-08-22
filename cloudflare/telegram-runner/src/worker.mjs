@@ -1699,7 +1699,7 @@ function panelHtml() {
     function statusKind(value) {
       const text = String(value || "").toLowerCase();
       if (text === "success" || text === "completed" || text === "passed" || text === "pass") return "ok";
-      if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high" || text === "browser_run_failed") return "bad";
+      if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high" || text === "browser_run_failed" || text === "blocked") return "bad";
       if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "syncing_result" || text === "cancel_requested" || text === "warning" || text === "medium" || text === "pending_browser_run" || text === "limited_out") return "warn";
       return "";
     }
@@ -1745,6 +1745,7 @@ function panelHtml() {
         passed: "прошло",
         pass: "прошло",
         warning: "предупреждение",
+        blocked: "заблокировано",
         flaky: "нестабильно",
         not_run: "не запускалось",
         pending_browser_run: "ждёт Browser Run",
@@ -1885,6 +1886,34 @@ function panelHtml() {
       }).join("");
     }
 
+    function renderCountryDevicePreflight(run) {
+      const suite = run.generated_suite || {};
+      const preflight = suite.country_device_preflight || run.country_device_preflight || null;
+      if (!preflight) return "";
+      const expected = preflight.expected_country || {};
+      const profile = preflight.profile_country || {};
+      const target = preflight.device_check_target || {};
+      const check = preflight.device_check || {};
+      const after = preflight.join_task_after_check || {};
+      const lines = [
+        "статус: " + uiLabel(preflight.status || "unknown"),
+        expected.countryName || expected.countryCode ? "IP-страна: " + [expected.countryName, expected.countryCode].filter(Boolean).join(" / ") : "",
+        expected.source ? "источник страны: " + expected.source : "",
+        profile.selected_country_before ? "страна до: " + profile.selected_country_before : "",
+        profile.selected_country_after ? "страна после: " + profile.selected_country_after : "",
+        profile.changed ? "страна изменена: да" : "",
+        target.url ? "check-link: " + target.url : "check-link: не найден",
+        check.ok ? "check-page: открыта" : check.reason || check.json_error ? "check-page: " + (check.reason || check.json_error) : "",
+        typeof after.confirmation_blocker === "boolean" ? "join_task после проверки: " + (after.confirmation_blocker ? "всё ещё заблокирован" : "разблокирован") : "",
+        profile.error ? "ошибка страны: " + profile.error : ""
+      ].filter(Boolean);
+      return '<div class="item"><b>Country/device preflight</b> ' +
+        pill(preflight.status || "unknown", statusKind(preflight.status)) +
+        '<pre>' + escapeHtml(lines.join("\\n")) + '</pre>' +
+        renderScreenshotEvidence(check) +
+        '</div>';
+    }
+
     function renderExecutionDetails(run, github) {
       if (run.engine === "cloudflare") {
         const cf = run.cloudflare_run || {};
@@ -1905,7 +1934,8 @@ function panelHtml() {
           run.error ? "ошибка: " + run.error : "",
           run.duration_sec ? "время: " + run.duration_sec + " сек." : ""
         ].filter(Boolean);
-        return '<div class="item"><b>Cloudflare runner</b><pre>' + escapeHtml(lines.join("\\n") || "Выполняется в Cloudflare.") + '</pre></div>';
+        return '<div class="item"><b>Cloudflare runner</b><pre>' + escapeHtml(lines.join("\\n") || "Выполняется в Cloudflare.") + '</pre></div>' +
+          renderCountryDevicePreflight(run);
       }
       return renderJobs(github);
     }
@@ -2075,8 +2105,14 @@ function panelHtml() {
           ? "глубина: " + (facts.reachedDepth ?? "?") + "/" + (facts.maxDepth ?? "?")
           : "",
         Number.isFinite(Number(facts.nodeCount)) ? "узлов: " + facts.nodeCount : "",
-        Number.isFinite(Number(facts.commandSeedsExploredCount)) ? "команды меню: " + facts.commandSeedsExploredCount : "",
+        Number.isFinite(Number(facts.commandSeedsExploredCount)) ? "seed-команды: " + facts.commandSeedsExploredCount : "",
         typeof facts.countryChangeCovered === "boolean" ? "смена страны: " + (facts.countryChangeCovered ? "найдена" : "не найдена") : "",
+        facts.expectedCountry ? "IP-страна: " + facts.expectedCountry : "",
+        facts.selectedCountryAfter ? "страна профиля: " + facts.selectedCountryAfter : "",
+        facts.countryDevicePreflightStatus ? "country/device preflight: " + uiLabel(facts.countryDevicePreflightStatus) : "",
+        typeof facts.deviceCheckLinkFound === "boolean" ? "check-link: " + (facts.deviceCheckLinkFound ? "найден" : "не найден") : "",
+        typeof facts.deviceCheckBrowserRun === "boolean" ? "check-page: " + (facts.deviceCheckBrowserRun ? "открыта" : "не открыта") : "",
+        typeof facts.joinTaskUnblocked === "boolean" ? "join_task: " + (facts.joinTaskUnblocked ? "разблокирован" : "заблокирован") : "",
         Number.isFinite(Number(facts.telegramClicks)) ? "Telegram кликов: " + facts.telegramClicks : "",
         Number.isFinite(Number(facts.webappScreenshots)) ? "WebApp скриншотов: " + facts.webappScreenshots : ""
       ].filter(Boolean);
