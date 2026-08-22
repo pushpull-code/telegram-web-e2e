@@ -310,6 +310,10 @@ function samePanelRunRequest(run, criteria) {
 
 async function refreshPanelRunTerminalState(env, run) {
   if (normalizePanelEngine(run?.engine, run?.suite) === "cloudflare" && run?.workflow_instance_id) {
+    const currentWorkflowStatus = String(run.workflow_status || "").trim().toLowerCase();
+    if (isTerminalPanelRun(run) && ["complete", "terminated", "errored"].includes(currentWorkflowStatus)) {
+      return run;
+    }
     try {
       const instance = await env.PANEL_RUN_WORKFLOW?.get?.(String(run.workflow_instance_id));
       const details = instance ? await instance.status() : null;
