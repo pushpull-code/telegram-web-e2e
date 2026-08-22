@@ -360,15 +360,21 @@ async function refreshPanelRunTerminalState(env, run) {
           return { ...sourceRun, workflow_status: details.status };
         }
         const nextStatus = PANEL_TERMINAL_STATUSES.has(outputStatus) ? outputStatus : "completed";
+        const workflowError =
+          details.output?.error ||
+          (nextStatus === "failure" && !sourceRun.error
+            ? `Cloudflare Workflow завершился без результата раннера; output status: ${outputStatus || "empty"}`
+            : "");
         const next = appendPanelEvent(
           {
             ...sourceRun,
             status: nextStatus,
             workflow_status: details.status,
+            ...(workflowError ? { error: workflowError } : {}),
             updated_at: nowIso(),
             completed_at: nowIso()
           },
-          { phase: "workflow", status: nextStatus, message: "Cloudflare Workflow завершён" }
+          { phase: "workflow", status: nextStatus, message: workflowError || "Cloudflare Workflow завершён" }
         );
         await savePanelRun(env, next);
         return next;
@@ -1288,7 +1294,10 @@ export class TelegramE2ERunWorkflow extends WorkflowEntrypoint {
         return {
           panelRunId,
           status: run?.status || "unknown",
-          completed_at: run?.completed_at || null
+          completed_at: run?.completed_at || null,
+          error: run?.error || null,
+          has_result: Boolean(run?.cloudflare_run || run?.generated_suite || run?.bot_map),
+          node_count: run?.cloudflare_run?.node_count || 0
         };
       }
     );
@@ -1681,6 +1690,7 @@ function panelHtml() {
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
           cf.ai_model ? "AI: " + cf.ai_model : "",
+          run.error ? "ошибка: " + run.error : "",
           run.duration_sec ? "время: " + run.duration_sec + " сек." : ""
         ].filter(Boolean);
         return '<div class="item"><b>Cloudflare runner</b><pre>' + escapeHtml(lines.join("\\n") || "Выполняется в Cloudflare.") + '</pre></div>';
@@ -1766,11 +1776,18 @@ function panelHtml() {
 
     function renderAi(run) {
       const review = run.generated_suite_ai_review || {};
+      const aiMeta = review.ai || {};
       const overview = review.overview || {};
       const defects = Array.isArray(review.defects) ? review.defects : [];
       const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
       const next = review.next_run || {};
       return '<h2>AI-разбор</h2>' +
+        '<div class="item"><b>Статус AI</b><pre>' + escapeHtml([
+          "enabled: " + Boolean(aiMeta.enabled),
+          aiMeta.model ? "model: " + aiMeta.model : "",
+          aiMeta.provider ? "provider: " + aiMeta.provider : "",
+          aiMeta.error ? "error: " + aiMeta.error : ""
+        ].filter(Boolean).join("\\n")) + '</pre></div>' +
         '<div class="item"><b>Общий взгляд</b><p>' + escapeHtml(overview.summary || "AI-разбора пока нет.") + '</p>' +
         '<div class="muted">' + escapeHtml(overview.business_purpose || overview.product_purpose || "") + '</div></div>' +
         '<div class="item"><b>Дефекты</b>' + (defects.length ? defects.map((item) => {
@@ -1798,7 +1815,8 @@ function panelHtml() {
       q("#tab-progress").innerHTML = '<h2>Прогресс</h2><div>' +
         pill(run.status || "queued", statusKind(run.status)) +
         (run.github_run_id ? pill("прогон " + run.github_run_id) : "") +
-        '</div><div class="item"><b>События</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
+        '</div>' + (run.error ? '<div class="item error"><b>Ошибка</b><pre>' + escapeHtml(run.error) + '</pre></div>' : '') +
+        '<div class="item"><b>События</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
           return '<div class="item"><span class="mono">' + escapeHtml(event.time || "") + '</span> ' +
             escapeHtml([event.phase, uiLabel(event.status), event.message].filter(Boolean).join(" · ")) + '</div>';
         }).join("") : '<div class="muted">Событий пока нет.</div>') + '</div>' + renderExecutionDetails(run, github);
