@@ -1302,6 +1302,32 @@ function confirmationStillBlocked(messages, activeAfterMessageId = null) {
   return CONFIRMATION_BLOCKER_RE.test(messageText(activeIncomingMessages(messages || [], activeAfterMessageId)));
 }
 
+function parseLabeledValue(text, labels) {
+  const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(?:${escapedLabels.join("|")})\\s*[:：-]\\s*([^\\n\\r]+)`, "i");
+  const match = String(text || "").match(re);
+  return match ? normalizeCountryText(match[1]) : "";
+}
+
+function parseDeviceCheckOutcome(messages, activeAfterMessageId = null) {
+  const text = messageText(activeIncomingMessages(messages || [], activeAfterMessageId));
+  const profileCountry = parseLabeledValue(text, ["Land im Profil", "Profile country", "Страна в профиле"]);
+  const detectedCountry = parseLabeledValue(text, ["Erkanntes Land", "Detected country", "Определенная страна", "Определённая страна"]);
+  const vpnRaw = parseLabeledValue(text, ["VPN"]);
+  const vpnValue = normalizeText(vpnRaw);
+  const vpnDetected = /^(an|on|yes|ja|да|вкл|true|enabled|ein)$/.test(vpnValue);
+  const vpnDisabled = /^(aus|off|no|nein|нет|выкл|false|disabled)$/.test(vpnValue);
+  return {
+    profile_country: profileCountry,
+    detected_country: detectedCountry,
+    vpn: vpnRaw,
+    vpn_detected: vpnDetected,
+    vpn_disabled: vpnDisabled,
+    country_match: Boolean(profileCountry && detectedCountry && countryCompareKey(profileCountry) === countryCompareKey(detectedCountry)),
+    text_sample: compactText(text, 700)
+  };
+}
+
 async function auditDeviceCheckUrl(env, run, target) {
   const url = String(target?.url || "").trim();
   const browserRun = {
@@ -1610,6 +1636,7 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
   result.device_check_target = deviceTarget;
   result.join_task_before_check = {
     confirmation_blocker: confirmationStillBlocked(joinState.messages || []),
+    outcome: parseDeviceCheckOutcome(joinState.messages || []),
     tail: activeIncomingMessages(joinState.messages || null, null).slice(-4).map(compactMessage)
   };
 
@@ -1636,13 +1663,20 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
   await sleep(options.settleMs);
   const finalState = await getMtprotoChatState(env, peer, options.stateLimit);
   const finalBlocked = confirmationStillBlocked(finalState.messages || []);
+  const finalOutcome = parseDeviceCheckOutcome(finalState.messages || []);
   result.join_task_after_check = {
     confirmation_blocker: finalBlocked,
+    outcome: finalOutcome,
     tail: activeIncomingMessages(finalState.messages || null, null).slice(-4).map(compactMessage)
   };
   result.status = result.device_check.ok && !finalBlocked ? "success" : "blocked";
   if (result.status === "blocked") {
-    result.error = finalBlocked
+    result.error = finalOutcome.vpn_detected
+      ? `Device-check detected VPN (${[
+          finalOutcome.profile_country ? `profile ${finalOutcome.profile_country}` : "",
+          finalOutcome.detected_country ? `detected ${finalOutcome.detected_country}` : ""
+        ].filter(Boolean).join(", ") || "country unknown"}).`
+      : finalBlocked
       ? "/join_task is still blocked after device check."
       : "Device-check page was not opened successfully.";
   }
@@ -2142,6 +2176,13 @@ function countryPreflightFailureReason(preflight) {
   if (check.screenshot_error) {
     return check.screenshot_error;
   }
+  const outcome = preflight.join_task_after_check?.outcome || preflight.join_task_before_check?.outcome || {};
+  if (outcome.vpn_detected) {
+    return `Device-check detected VPN (${[
+      outcome.profile_country ? `profile ${outcome.profile_country}` : "",
+      outcome.detected_country ? `detected ${outcome.detected_country}` : ""
+    ].filter(Boolean).join(", ") || "country unknown"}).`;
+  }
   if (preflight.join_task_after_check?.confirmation_blocker) {
     return "/join_task is still blocked after device check.";
   }
@@ -2240,6 +2281,14 @@ function buildCountryPreflightBlockedResult(run, preflight, startedAt) {
       countryDevicePreflightStatus: preflight?.status || "blocked",
       deviceCheckLinkFound: Boolean(preflight?.device_check_target),
       deviceCheckBrowserRun: Boolean(preflight?.device_check?.ok),
+      deviceCheckVpnDetected: Boolean(
+        preflight?.join_task_after_check?.outcome?.vpn_detected ||
+        preflight?.join_task_before_check?.outcome?.vpn_detected
+      ),
+      deviceCheckCountryMatch: Boolean(
+        preflight?.join_task_after_check?.outcome?.country_match ||
+        preflight?.join_task_before_check?.outcome?.country_match
+      ),
       joinTaskUnblocked: preflight?.join_task_after_check
         ? !preflight.join_task_after_check.confirmation_blocker
         : false
@@ -2555,6 +2604,14 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
       countryDevicePreflightStatus: countryDevicePreflight.status,
       deviceCheckLinkFound: Boolean(countryDevicePreflight.device_check_target),
       deviceCheckBrowserRun: Boolean(countryDevicePreflight.device_check?.ok),
+      deviceCheckVpnDetected: Boolean(
+        countryDevicePreflight.join_task_after_check?.outcome?.vpn_detected ||
+        countryDevicePreflight.join_task_before_check?.outcome?.vpn_detected
+      ),
+      deviceCheckCountryMatch: Boolean(
+        countryDevicePreflight.join_task_after_check?.outcome?.country_match ||
+        countryDevicePreflight.join_task_before_check?.outcome?.country_match
+      ),
       joinTaskUnblocked: countryDevicePreflight.join_task_after_check
         ? !countryDevicePreflight.join_task_after_check.confirmation_blocker
         : null

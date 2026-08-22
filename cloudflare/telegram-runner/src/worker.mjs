@@ -1902,6 +1902,7 @@ function panelHtml() {
       const target = preflight.device_check_target || {};
       const check = preflight.device_check || {};
       const after = preflight.join_task_after_check || {};
+      const outcome = after.outcome || (preflight.join_task_before_check || {}).outcome || {};
       const countryClick = profile.country_click || {};
       const countryPages = Array.isArray(profile.country_pages) ? profile.country_pages : [];
       const countryPageSummary = countryPages
@@ -1922,6 +1923,11 @@ function panelHtml() {
         countryPageSummary ? "просмотренные страны:\\n" + countryPageSummary : "",
         target.url ? "check-link: " + target.url : "check-link: не найден",
         check.ok ? "check-page: открыта" : check.reason || check.json_error ? "check-page: " + (check.reason || check.json_error) : "",
+        outcome.profile_country || outcome.detected_country
+          ? "check country: " + [outcome.profile_country ? "profile " + outcome.profile_country : "", outcome.detected_country ? "detected " + outcome.detected_country : ""].filter(Boolean).join(" / ")
+          : "",
+        outcome.vpn ? "VPN: " + outcome.vpn : "",
+        typeof outcome.country_match === "boolean" && (outcome.profile_country || outcome.detected_country) ? "country match: " + (outcome.country_match ? "да" : "нет") : "",
         typeof after.confirmation_blocker === "boolean" ? "join_task после проверки: " + (after.confirmation_blocker ? "всё ещё заблокирован" : "разблокирован") : "",
         preflight.error ? "ошибка preflight: " + preflight.error : "",
         profile.error ? "ошибка страны: " + profile.error : ""
@@ -2131,6 +2137,8 @@ function panelHtml() {
         facts.countryDevicePreflightStatus ? "country/device preflight: " + uiLabel(facts.countryDevicePreflightStatus) : "",
         typeof facts.deviceCheckLinkFound === "boolean" ? "check-link: " + (facts.deviceCheckLinkFound ? "найден" : "не найден") : "",
         typeof facts.deviceCheckBrowserRun === "boolean" ? "check-page: " + (facts.deviceCheckBrowserRun ? "открыта" : "не открыта") : "",
+        typeof facts.deviceCheckCountryMatch === "boolean" ? "check country: " + (facts.deviceCheckCountryMatch ? "совпал" : "не совпал") : "",
+        typeof facts.deviceCheckVpnDetected === "boolean" ? "VPN: " + (facts.deviceCheckVpnDetected ? "обнаружен" : "не обнаружен") : "",
         typeof facts.joinTaskUnblocked === "boolean" ? "join_task: " + (facts.joinTaskUnblocked ? "разблокирован" : "заблокирован") : "",
         Number.isFinite(Number(facts.telegramClicks)) ? "Telegram кликов: " + facts.telegramClicks : "",
         Number.isFinite(Number(facts.webappScreenshots)) ? "WebApp скриншотов: " + facts.webappScreenshots : ""
