@@ -78,6 +78,10 @@ function expandEnv(value: unknown): unknown {
   return value;
 }
 
+export function expandScenarioEnv<T>(value: T): T {
+  return expandEnv(value) as T;
+}
+
 function assertScenario(value: unknown): asserts value is ScenarioDefinition {
   if (!value || typeof value !== "object") {
     throw new Error("Scenario file must contain a JSON object.");
@@ -131,7 +135,8 @@ async function waitForTailTextAny(
   page: Page,
   anchors: string[],
   options: {
-    beforeFingerprint?: string;
+    afterActionText?: string;
+    beforeMessages?: string[];
     requireFreshResponse: boolean;
     tailLimit: number;
     timeoutMs: number;
@@ -143,18 +148,71 @@ async function waitForTailTextAny(
     .poll(
       async () => {
         const tail = await collectTailMessages(page, options.tailLimit);
-        const fingerprint = tail.join("\n@@\n");
-        if (options.requireFreshResponse && fingerprint === options.beforeFingerprint) {
+        const candidateMessages = options.afterActionText
+          ? tailMessagesAfterAction(tail, options.afterActionText)
+          : options.requireFreshResponse
+            ? tailMessagesAfter(options.beforeMessages || [], tail)
+            : tail;
+
+        if (options.requireFreshResponse && candidateMessages.length === 0) {
           return false;
         }
 
         return normalizedAnchors.some((anchor) =>
-          tail.some((message) => normalizeForMatch(message).includes(anchor))
+          candidateMessages.some((message) => normalizeForMatch(message).includes(anchor))
         );
       },
       { timeout: options.timeoutMs }
     )
     .toBeTruthy();
+}
+
+function tailMessagesAfterAction(tail: string[], actionText: string): string[] {
+  const normalizedAction = normalizeForMatch(actionText);
+  if (!normalizedAction) {
+    return tail;
+  }
+
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    if (normalizeForMatch(tail[index]).includes(normalizedAction)) {
+      return tail.slice(index + 1);
+    }
+  }
+
+  return [];
+}
+
+function tailMessagesAfter(before: string[], after: string[]): string[] {
+  if (before.length === 0) {
+    return after;
+  }
+
+  const normalizedBefore = before.map(normalizeForMatch);
+  const normalizedAfter = after.map(normalizeForMatch);
+  const maxOverlap = Math.min(normalizedBefore.length, normalizedAfter.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    const beforeSuffix = normalizedBefore.slice(normalizedBefore.length - overlap);
+    const afterPrefix = normalizedAfter.slice(0, overlap);
+    if (beforeSuffix.every((message, index) => message === afterPrefix[index])) {
+      return after.slice(overlap);
+    }
+  }
+
+  const remainingOldMessages = new Map<string, number>();
+  for (const message of normalizedBefore) {
+    remainingOldMessages.set(message, (remainingOldMessages.get(message) || 0) + 1);
+  }
+
+  return after.filter((message, index) => {
+    const normalized = normalizedAfter[index];
+    const oldCount = remainingOldMessages.get(normalized) || 0;
+    if (oldCount > 0) {
+      remainingOldMessages.set(normalized, oldCount - 1);
+      return false;
+    }
+    return true;
+  });
 }
 
 async function waitForButtonAny(page: Page, labels: string[], timeoutMs: number): Promise<string> {
@@ -222,7 +280,6 @@ async function runStep(
 ): Promise<void> {
   const timeoutMs = step.timeoutMs ?? 45_000;
   const tailBefore = await collectTailMessages(page, tailLimit).catch(() => []);
-  const beforeFingerprint = tailBefore.join("\n@@\n");
   let hasActionThatCanChangeChat = false;
 
   if (step.openBot) {
@@ -268,7 +325,8 @@ async function runStep(
 
   if (step.expectTextAny?.length) {
     await waitForTailTextAny(page, step.expectTextAny, {
-      beforeFingerprint,
+      afterActionText: step.send,
+      beforeMessages: tailBefore,
       requireFreshResponse: step.requireFreshResponse ?? hasActionThatCanChangeChat,
       tailLimit,
       timeoutMs
@@ -297,7 +355,8 @@ export async function runScenario(
       await runStep(page, step, bot, tailLimit);
       await evidence.append(page, stepIndex, step.name, "passed", action);
     } catch (error) {
-      await evidence.append(page, stepIndex, step.name, "failed", action, error);
+      const status = step.optional ? "warning" : "failed";
+      await evidence.append(page, stepIndex, step.name, status, action, error);
       if (!step.optional) {
         failures.push(`${step.name}: ${error instanceof Error ? error.message : String(error)}`);
       }

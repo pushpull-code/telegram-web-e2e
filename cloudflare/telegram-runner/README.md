@@ -8,6 +8,8 @@ Cloudflare Worker for Telegram bot orchestration:
 - starts GitHub Actions workflow run
 - receives completion callback and sends report to Telegram with duration, scenario, run link, screenshots
 - asks user if a new test should be started
+- accepts direct commands like `/run generated_scenarios safe`
+- serves `/panel` web UI for bot username based QA runs
 
 ## 1) Create KV namespace
 
@@ -43,6 +45,12 @@ Optional secret (if callback URL differs from current worker host):
 npx wrangler secret put REPORT_CALLBACK_URL
 ```
 
+Optional secret for the web panel API:
+
+```bash
+npx wrangler secret put PANEL_TOKEN
+```
+
 ## 3) Deploy
 
 ```bash
@@ -74,3 +82,47 @@ Workflow `telegram-web-e2e.yml` (updated in this repo) will send callback payloa
 - scenario name/key
 - run URL
 - up to 3 screenshots in base64
+- generated scenario suite summary when `generated_scenarios` was run
+
+For `generated_scenarios`, the worker adds a short branch-check block to the Telegram report: total drafts, passed/flaky/failed/not-run counts, and one compact line per generated branch.
+
+## Web panel
+
+Open:
+
+```text
+https://<worker-url>/panel
+```
+
+The panel can:
+
+- start a GitHub Actions run by bot username and optional `/start` payload;
+- show live GitHub job/step progress;
+- show generated documents expected from the run;
+- show compact bot logic branches from `generated-scenario-suite-report.json`;
+- rerun one or several selected generated branches.
+
+Recommended mode for a first pass:
+
+```text
+suite: generated_scenarios
+selector: smart
+max drafts: 8
+```
+
+For a dedicated dev/test bot, use selector `dev`: it allows deeper/state-changing branch discovery according to workflow safety settings.
+
+## Telegram commands
+
+```text
+/run
+/run ru
+/run en
+/run generated_scenarios
+/run generated_scenarios safe
+/run generated_scenarios dev
+/run generated_scenario start-smoke
+```
+
+Selectors are accepted only for `generated_scenario` and `generated_scenarios`.
+Use `dev` only for a dedicated dev/test bot: it clicks state-changing inline buttons and includes test-account branches.

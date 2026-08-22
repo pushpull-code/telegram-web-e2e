@@ -1,6 +1,23 @@
 const LANG_RU = "ru";
 const LANG_EN = "en";
 const SCENARIO_START_FINISH = "start_finish";
+const REQUIRED_SUITES = new Set([
+  "bot",
+  "mtproto",
+  "discover_mtproto",
+  "generated_scenario",
+  "generated_scenarios",
+  "scenario",
+  "discover",
+  "autorun",
+  "freelancer",
+  "settings",
+  "all"
+]);
+const GENERATED_SELECTOR_SUITES = new Set(["generated_scenario", "generated_scenarios"]);
+const PANEL_RUN_PREFIX = "panel-run:";
+const PANEL_RUN_TTL_SECONDS = 60 * 60 * 24 * 14;
+const PANEL_RUN_LIST_LIMIT = 30;
 
 const TEXT = {
   [LANG_RU]: {
@@ -68,11 +85,200 @@ function normalizeLang(value) {
   return value === LANG_EN ? LANG_EN : LANG_RU;
 }
 
+function normalizeSuite(value, fallback = "autorun") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (REQUIRED_SUITES.has(normalized)) {
+    return normalized;
+  }
+  const fallbackNormalized = String(fallback || "").trim().toLowerCase();
+  return REQUIRED_SUITES.has(fallbackNormalized) ? fallbackNormalized : "autorun";
+}
+
+function stripCommandMention(text) {
+  return String(text || "").trim().replace(/^(\/\w+)@\w+/i, "$1");
+}
+
+function scenarioKeyForRun(suite, selector) {
+  if (suite === "generated_scenario") {
+    return selector ? `generated_scenario_${selector}` : "generated_scenario_start-smoke";
+  }
+  if (suite === "generated_scenarios") {
+    return selector ? `generated_scenarios_${selector}` : "generated_scenarios_safe";
+  }
+  return suite === "autorun" ? SCENARIO_START_FINISH : suite;
+}
+
+function isDevGeneratedSelector(selector) {
+  return ["dev", "unsafe", "runnable"].includes(String(selector || "").trim().toLowerCase());
+}
+
+function parseRunText(text, stateLang, defaultSuite) {
+  const normalized = stripCommandMention(text);
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  const firstArg = String(parts[1] || "").trim().toLowerCase();
+  const secondArg = String(parts[2] || "").trim();
+  let lang = normalizeLang(stateLang || LANG_RU);
+  let suite = normalizeSuite(defaultSuite || "autorun");
+  let selector = "";
+
+  if (firstArg === LANG_RU || firstArg === LANG_EN) {
+    lang = normalizeLang(firstArg);
+  } else if (firstArg) {
+    if (!REQUIRED_SUITES.has(firstArg)) {
+      return {
+        error: `Unknown suite: ${firstArg}`
+      };
+    }
+    suite = firstArg;
+    selector = secondArg;
+  }
+
+  if (selector && !GENERATED_SELECTOR_SUITES.has(suite)) {
+    return {
+      error: "Draft selector is allowed only for generated_scenario/generated_scenarios."
+    };
+  }
+
+  return {
+    lang,
+    suite,
+    scenarioKey: scenarioKeyForRun(suite, selector),
+    ...(suite === "generated_scenario" && selector ? { generatedScenarioDraft: selector } : {}),
+    ...(suite === "generated_scenarios" && selector ? { generatedScenarioDrafts: selector } : {})
+  };
+}
+
 function normalizeChatId(chatId) {
   if (chatId === null || chatId === undefined) {
     return "";
   }
   return String(chatId).trim();
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload, null, 2), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    }
+  });
+}
+
+function htmlResponse(html) {
+  return new Response(html, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    }
+  });
+}
+
+function normalizeBotUsername(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^@+/, "");
+  return /^[A-Za-z0-9_]{5,64}$/.test(normalized) ? normalized : "";
+}
+
+function clampNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function runIdFromUrl(value) {
+  const match = String(value || "").match(/\/actions\/runs\/(\d+)/);
+  return match ? match[1] : "";
+}
+
+function panelRunKey(id) {
+  return `${PANEL_RUN_PREFIX}${id}`;
+}
+
+function isPanelAuthorized(env, request) {
+  const expected = String(env.PANEL_TOKEN || "").trim();
+  if (!expected) {
+    return true;
+  }
+  const url = new URL(request.url);
+  const provided = String(request.headers.get("x-panel-token") || url.searchParams.get("token") || "").trim();
+  return provided === expected;
+}
+
+function requirePanelAuthorization(env, request) {
+  if (!isPanelAuthorized(env, request)) {
+    return jsonResponse({ error: "Unauthorized" }, 401);
+  }
+  return null;
+}
+
+async function loadPanelRun(env, id) {
+  if (!env.BOT_STATE_KV || !id) {
+    return null;
+  }
+  try {
+    const value = await env.BOT_STATE_KV.get(panelRunKey(id), { type: "json" });
+    return value && typeof value === "object" ? value : null;
+  } catch (error) {
+    console.error("loadPanelRun failed", error);
+    return null;
+  }
+}
+
+async function savePanelRun(env, run) {
+  if (!env.BOT_STATE_KV || !run?.id) {
+    return;
+  }
+  await env.BOT_STATE_KV.put(panelRunKey(run.id), JSON.stringify(run), {
+    expirationTtl: PANEL_RUN_TTL_SECONDS
+  });
+}
+
+async function listPanelRuns(env) {
+  if (!env.BOT_STATE_KV) {
+    return [];
+  }
+  const listed = await env.BOT_STATE_KV.list({ prefix: PANEL_RUN_PREFIX, limit: PANEL_RUN_LIST_LIMIT });
+  const runs = [];
+  for (const key of listed.keys || []) {
+    const id = String(key.name || "").slice(PANEL_RUN_PREFIX.length);
+    const run = await loadPanelRun(env, id);
+    if (run) {
+      runs.push(run);
+    }
+  }
+  return runs.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+function appendPanelEvent(run, event) {
+  const events = Array.isArray(run.events) ? run.events : [];
+  return {
+    ...run,
+    events: [...events, { time: nowIso(), ...event }].slice(-50)
+  };
+}
+
+function compactPanelDrafts(generatedSuite) {
+  const drafts = Array.isArray(generatedSuite?.drafts) ? generatedSuite.drafts : [];
+  return drafts.map((draft) => ({
+    id: String(draft?.id || ""),
+    status: String(draft?.status || ""),
+    scenario: String(draft?.scenario || ""),
+    source_type: String(draft?.source_type || ""),
+    ai_severity: String(draft?.ai_severity || ""),
+    first_error: String(draft?.first_error || ""),
+    step_count: numberOrZero(draft?.step_count),
+    passed_steps: numberOrZero(draft?.passed_steps),
+    warning_steps: numberOrZero(draft?.warning_steps),
+    failed_steps: numberOrZero(draft?.failed_steps)
+  }));
 }
 
 function formatDuration(seconds) {
@@ -89,6 +295,12 @@ function formatDuration(seconds) {
 function scenarioTitle(lang, scenarioKey) {
   if (scenarioKey === SCENARIO_START_FINISH) {
     return t(lang, "scenarioStartFinish");
+  }
+  if (String(scenarioKey || "").startsWith("generated_scenario_")) {
+    return `generated_scenario: ${String(scenarioKey).slice("generated_scenario_".length)}`;
+  }
+  if (String(scenarioKey || "").startsWith("generated_scenarios_")) {
+    return `generated_scenarios: ${String(scenarioKey).slice("generated_scenarios_".length)}`;
   }
   return scenarioKey;
 }
@@ -113,6 +325,228 @@ function failureReasonText(lang, failureCode, failureMessage) {
     return t(lang, "reportReasonNoTask");
   }
   return String(failureMessage || "").trim();
+}
+
+function compactReportText(value, maxLength = 180) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function generatedSuiteLabel(lang, key) {
+  const labels = {
+    [LANG_RU]: {
+      title: "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0432\u0435\u0442\u043e\u043a",
+      total: "\u0432\u0441\u0435\u0433\u043e",
+      passed: "\u043f\u0440\u043e\u0448\u043b\u043e",
+      failed: "\u0443\u043f\u0430\u043b\u043e",
+      warning: "\u043f\u0440\u0435\u0434\u0443\u043f\u0440.",
+      flaky: "\u043d\u0435\u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e",
+      notRun: "\u043d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u043b\u043e\u0441\u044c",
+      steps: "\u0448\u0430\u0433\u043e\u0432",
+      attempts: "\u043f\u043e\u043f\u044b\u0442\u043e\u043a",
+      error: "\u043e\u0448\u0438\u0431\u043a\u0430",
+      discovered: "\u043d\u0430\u0439\u0434\u0435\u043d\u043e",
+      selected: "\u0432\u044b\u0431\u0440\u0430\u043d\u043e",
+      manual: "manual",
+      testAccount: "test-account",
+      limitedOut: "\u043d\u0435 \u0432\u043e\u0448\u043b\u043e \u0438\u0437-\u0437\u0430 \u043b\u0438\u043c\u0438\u0442\u0430",
+      more: "\u0435\u0449\u0435",
+      branches: "\u0432\u0435\u0442\u043e\u043a"
+    },
+    [LANG_EN]: {
+      title: "Branch checks",
+      total: "total",
+      passed: "passed",
+      failed: "failed",
+      warning: "warning",
+      flaky: "flaky",
+      notRun: "not run",
+      steps: "steps",
+      attempts: "attempts",
+      error: "error",
+      discovered: "discovered",
+      selected: "selected",
+      manual: "manual",
+      testAccount: "test-account",
+      limitedOut: "limited out",
+      more: "more",
+      branches: "branches"
+    }
+  };
+  const safeLang = lang === LANG_EN ? LANG_EN : LANG_RU;
+  return labels[safeLang][key] || labels[LANG_RU][key] || key;
+}
+
+function generatedSuiteStatusText(lang, status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "passed" || normalized === "success") {
+    return generatedSuiteLabel(lang, "passed");
+  }
+  if (normalized === "failed" || normalized === "failure") {
+    return generatedSuiteLabel(lang, "failed");
+  }
+  if (normalized === "flaky") {
+    return generatedSuiteLabel(lang, "flaky");
+  }
+  if (normalized === "warning") {
+    return generatedSuiteLabel(lang, "warning");
+  }
+  return generatedSuiteLabel(lang, "notRun");
+}
+
+function numberOrZero(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function formatGeneratedSuiteText(lang, generatedSuite) {
+  if (!generatedSuite || typeof generatedSuite !== "object") {
+    return "";
+  }
+
+  const summary = generatedSuite.summary && typeof generatedSuite.summary === "object"
+    ? generatedSuite.summary
+    : {};
+  const coverage = generatedSuite.coverage && typeof generatedSuite.coverage === "object"
+    ? generatedSuite.coverage
+    : null;
+  const drafts = Array.isArray(generatedSuite.drafts) ? generatedSuite.drafts : [];
+  const total = numberOrZero(summary.total) || numberOrZero(generatedSuite.draft_count) || drafts.length;
+  if (total === 0 && drafts.length === 0) {
+    return "";
+  }
+
+  const lines = [
+    "",
+    generatedSuiteLabel(lang, "title"),
+    [
+      `${generatedSuiteLabel(lang, "total")}: ${total}`,
+      `${generatedSuiteLabel(lang, "passed")}: ${numberOrZero(summary.passed)}`,
+      `${generatedSuiteLabel(lang, "flaky")}: ${numberOrZero(summary.flaky)}`,
+      ...(numberOrZero(summary.warning) > 0 ? [`${generatedSuiteLabel(lang, "warning")}: ${numberOrZero(summary.warning)}`] : []),
+      `${generatedSuiteLabel(lang, "failed")}: ${numberOrZero(summary.failed)}`,
+      `${generatedSuiteLabel(lang, "notRun")}: ${numberOrZero(summary.notRun)}`
+    ].join(", ")
+  ];
+
+  if (coverage) {
+    const coverageParts = [
+      `${generatedSuiteLabel(lang, "discovered")}: ${numberOrZero(coverage.discovered)}`,
+      `${generatedSuiteLabel(lang, "selected")}: ${numberOrZero(coverage.selected)}`,
+      `${generatedSuiteLabel(lang, "manual")}: ${numberOrZero(coverage.manual)}`,
+      `${generatedSuiteLabel(lang, "testAccount")}: ${numberOrZero(coverage.runnableTestAccount)}`
+    ];
+    if (numberOrZero(coverage.limitedOut) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "limitedOut")}: ${numberOrZero(coverage.limitedOut)}`);
+    }
+    lines.push(coverageParts.join(", "));
+  }
+
+  const maxDrafts = 6;
+  for (const draft of drafts.slice(0, maxDrafts)) {
+    const id = compactReportText(draft?.id || draft?.scenario || "draft", 70);
+    const status = generatedSuiteStatusText(lang, draft?.status);
+    const stepCount = numberOrZero(draft?.step_count) || (Array.isArray(draft?.steps) ? draft.steps.length : 0);
+    const passedSteps = numberOrZero(draft?.passed_steps);
+    const warningSteps = numberOrZero(draft?.warning_steps);
+    const attempts = numberOrZero(draft?.attempts);
+    const stepText = stepCount > 0
+      ? `, ${generatedSuiteLabel(lang, "steps")}: ${passedSteps}/${stepCount}${warningSteps > 0 ? `, ${generatedSuiteLabel(lang, "warning")}: ${warningSteps}` : ""}`
+      : "";
+    const attemptsText = attempts > 1 ? `, ${generatedSuiteLabel(lang, "attempts")}: ${attempts}` : "";
+    const aiSeverity = compactReportText(draft?.ai_severity, 40);
+    const aiText = aiSeverity ? `, AI: ${aiSeverity}` : "";
+    lines.push(`- ${id}: ${status}${stepText}${attemptsText}${aiText}`);
+
+    const firstError = compactReportText(draft?.first_error, 220);
+    if (firstError && String(draft?.status || "").toLowerCase() !== "passed") {
+      lines.push(`  ${generatedSuiteLabel(lang, "error")}: ${firstError}`);
+    }
+  }
+
+  if (drafts.length > maxDrafts) {
+    lines.push(`- ${generatedSuiteLabel(lang, "more")} ${drafts.length - maxDrafts} ${generatedSuiteLabel(lang, "branches")}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatGeneratedSuiteAiReviewText(lang, aiReview) {
+  if (!aiReview || typeof aiReview !== "object") {
+    return "";
+  }
+
+  const overview = aiReview.overview && typeof aiReview.overview === "object" ? aiReview.overview : {};
+  const defects = Array.isArray(aiReview.defects) ? aiReview.defects : [];
+  const branchReviews = Array.isArray(aiReview.branch_reviews) ? aiReview.branch_reviews : [];
+  const coverageGaps = Array.isArray(aiReview.coverage_gaps) ? aiReview.coverage_gaps : [];
+  const nextRun = aiReview.next_run && typeof aiReview.next_run === "object" ? aiReview.next_run : {};
+  const ai = aiReview.ai && typeof aiReview.ai === "object" ? aiReview.ai : {};
+  const title = lang === LANG_EN ? "AI review" : "AI-разбор";
+  const defectTitle = lang === LANG_EN ? "defects" : "дефекты";
+  const branchTitle = lang === LANG_EN ? "branches" : "ветки";
+  const gapTitle = lang === LANG_EN ? "coverage gaps" : "пробелы";
+  const nextTitle = lang === LANG_EN ? "next" : "дальше";
+
+  const lines = ["", title];
+  const summary = compactReportText(overview.summary, 520);
+  if (summary) {
+    lines.push(summary);
+  }
+
+  const aiError = compactReportText(ai.error, 220);
+  if (aiError) {
+    lines.push(`AI: ${aiError}`);
+  }
+
+  for (const defect of defects.slice(0, 3)) {
+    const severity = compactReportText(defect?.severity, 40);
+    const titleText = compactReportText(defect?.title, 220);
+    if (titleText) {
+      lines.push(`- ${defectTitle}: ${severity ? `[${severity}] ` : ""}${titleText}`);
+    }
+    const nextCheck = compactReportText(defect?.next_check, 220);
+    if (nextCheck) {
+      lines.push(`  ${nextTitle}: ${nextCheck}`);
+    }
+  }
+
+  const notableBranches = branchReviews
+    .filter((branch) => {
+      const verdict = String(branch?.verdict || "").toLowerCase();
+      return verdict !== "pass" || (Array.isArray(branch?.defects) && branch.defects.length > 0);
+    })
+    .slice(0, 4);
+  for (const branch of notableBranches) {
+    const id = compactReportText(branch?.draft_id, 90);
+    const verdict = compactReportText(branch?.verdict, 40);
+    const observed = compactReportText(branch?.observed_behavior, 220);
+    if (id || observed) {
+      lines.push(`- ${branchTitle}: ${id || "branch"}${verdict ? ` (${verdict})` : ""}${observed ? ` — ${observed}` : ""}`);
+    }
+  }
+
+  for (const gap of coverageGaps.slice(0, 3)) {
+    const text = compactReportText(gap, 220);
+    if (text) {
+      lines.push(`- ${gapTitle}: ${text}`);
+    }
+  }
+
+  const runnerChanges = Array.isArray(nextRun.runner_changes) ? nextRun.runner_changes : [];
+  for (const change of runnerChanges.slice(0, 2)) {
+    const text = compactReportText(change, 220);
+    if (text) {
+      lines.push(`- ${nextTitle}: ${text}`);
+    }
+  }
+
+  return lines.length > 2 ? lines.join("\n") : "";
 }
 
 async function telegramJson(env, method, payload) {
@@ -257,13 +691,28 @@ function isChatAllowed(env, chatId) {
   return normalizeChatId(chatId) === allowed;
 }
 
-async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
+async function dispatchGithubRun(
+  env,
+  {
+    chatId,
+    lang,
+    scenarioKey,
+    suite,
+    generatedScenarioDraft,
+    generatedScenarioDrafts,
+    botUsername,
+    startPayload,
+    panelRunId,
+    maxDrafts,
+    reportCallbackUrlOverride
+  }
+) {
   const owner = String(env.GITHUB_OWNER || "").trim();
   const repo = String(env.GITHUB_REPO || "").trim();
   const workflowFile = String(env.GITHUB_WORKFLOW_FILE || "telegram-web-e2e.yml").trim();
-  const suite = String(env.DEFAULT_SUITE || "autorun").trim();
+  const runSuite = normalizeSuite(suite || env.DEFAULT_SUITE || "autorun");
   const ref = String(env.GITHUB_REF || "main").trim();
-  const reportCallbackUrl = String(env.REPORT_CALLBACK_URL || "").trim();
+  const reportCallbackUrl = String(reportCallbackUrlOverride || env.REPORT_CALLBACK_URL || "").trim();
   const githubToken = String(env.GITHUB_PAT || "").trim();
 
   if (!owner || !repo || !githubToken) {
@@ -275,14 +724,36 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
   const dispatchBody = {
     ref,
     inputs: {
-      suite,
-      chat_id: String(chatId),
+      suite: runSuite,
+      chat_id: normalizeChatId(chatId),
       lang: String(lang),
       bot_lang: LANG_RU,
       scenario_key: String(scenarioKey),
       report_callback_url: reportCallbackUrl
     }
   };
+  const normalizedBotUsername = normalizeBotUsername(botUsername);
+  if (normalizedBotUsername) {
+    dispatchBody.inputs.bot_username = normalizedBotUsername;
+  }
+  if (startPayload) {
+    dispatchBody.inputs.bot_start_payload = String(startPayload);
+  }
+  if (panelRunId) {
+    dispatchBody.inputs.panel_run_id = String(panelRunId);
+  }
+  if (runSuite === "generated_scenario" && generatedScenarioDraft) {
+    dispatchBody.inputs.generated_scenario_draft = String(generatedScenarioDraft);
+  }
+  if (runSuite === "generated_scenarios" && generatedScenarioDrafts) {
+    dispatchBody.inputs.generated_scenario_drafts = String(generatedScenarioDrafts);
+    if (isDevGeneratedSelector(generatedScenarioDrafts)) {
+      dispatchBody.inputs.generated_scenario_allow_test_account = "true";
+    }
+    dispatchBody.inputs.generated_scenario_max_drafts = String(
+      clampNumber(maxDrafts || env.GENERATED_SCENARIO_DEV_MAX_DRAFTS || "8", 8, 1, 50)
+    );
+  }
 
   const dispatchResponse = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`,
@@ -306,6 +777,9 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
 
   const waitUntil = Date.now() + 15000;
   let runUrl = `https://github.com/${owner}/${repo}/actions/workflows/${workflowFile}`;
+  let runId = "";
+  let runStatus = "";
+  let runConclusion = "";
 
   while (Date.now() < waitUntil) {
     await new Promise((resolve) => setTimeout(resolve, 2500));
@@ -333,19 +807,28 @@ async function dispatchGithubRun(env, { chatId, lang, scenarioKey }) {
     const match = runs.find((run) => typeof run?.created_at === "string" && run.created_at >= startedAtIso);
     if (match && typeof match.html_url === "string") {
       runUrl = match.html_url;
+      runId = String(match.id || "");
+      runStatus = String(match.status || "");
+      runConclusion = String(match.conclusion || "");
       break;
     }
   }
 
-  return runUrl;
+  return {
+    runUrl,
+    runId,
+    status: runStatus,
+    conclusion: runConclusion
+  };
 }
 
-async function triggerScenarioRun(env, chatId, lang, scenarioKey) {
+async function triggerScenarioRun(env, chatId, lang, scenarioKey, runOptions = {}) {
   try {
-    const runUrl = await dispatchGithubRun(env, { chatId, lang, scenarioKey });
+    const run = await dispatchGithubRun(env, { chatId, lang, scenarioKey, ...runOptions });
     const messageText = [
       t(lang, "launchStarted"),
-      `${t(lang, "launchLink")} ${runUrl}`,
+      `${t(lang, "reportScenario")}: ${scenarioTitle(lang, scenarioKey)}`,
+      `${t(lang, "launchLink")} ${run.runUrl}`,
       t(lang, "launchWaitReport")
     ].join("\n");
     await safeSendMessage(env, chatId, messageText);
@@ -432,6 +915,699 @@ function decodeBase64(input) {
   return bytes;
 }
 
+async function githubJson(env, path) {
+  const owner = String(env.GITHUB_OWNER || "").trim();
+  const repo = String(env.GITHUB_REPO || "").trim();
+  const githubToken = String(env.GITHUB_PAT || "").trim();
+  if (!owner || !repo || !githubToken) {
+    throw new Error("Missing GITHUB_OWNER/GITHUB_REPO/GITHUB_PAT");
+  }
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}${path}`, {
+    headers: {
+      authorization: `Bearer ${githubToken}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "telegram-e2e-runner-panel",
+      "x-github-api-version": "2022-11-28"
+    }
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`GitHub API failed: ${response.status} ${text}`);
+  }
+  return response.json();
+}
+
+async function fetchGithubRunDetails(env, runId) {
+  const safeRunId = String(runId || "").trim();
+  if (!safeRunId) {
+    return null;
+  }
+  const [run, jobsPayload] = await Promise.all([
+    githubJson(env, `/actions/runs/${encodeURIComponent(safeRunId)}`),
+    githubJson(env, `/actions/runs/${encodeURIComponent(safeRunId)}/jobs?per_page=100`)
+  ]);
+  return {
+    id: String(run?.id || safeRunId),
+    name: String(run?.name || ""),
+    status: String(run?.status || ""),
+    conclusion: String(run?.conclusion || ""),
+    html_url: String(run?.html_url || ""),
+    created_at: String(run?.created_at || ""),
+    updated_at: String(run?.updated_at || ""),
+    run_started_at: String(run?.run_started_at || ""),
+    jobs: Array.isArray(jobsPayload?.jobs)
+      ? jobsPayload.jobs.map((job) => ({
+          id: String(job?.id || ""),
+          name: String(job?.name || ""),
+          status: String(job?.status || ""),
+          conclusion: String(job?.conclusion || ""),
+          started_at: String(job?.started_at || ""),
+          completed_at: String(job?.completed_at || ""),
+          html_url: String(job?.html_url || ""),
+          steps: Array.isArray(job?.steps)
+            ? job.steps.map((step) => ({
+                name: String(step?.name || ""),
+                status: String(step?.status || ""),
+                conclusion: String(step?.conclusion || ""),
+                number: Number.isFinite(Number(step?.number)) ? Number(step.number) : 0,
+                started_at: String(step?.started_at || ""),
+                completed_at: String(step?.completed_at || "")
+              }))
+            : []
+        }))
+      : []
+  };
+}
+
+function panelHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telegram Bot QA Panel</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f1;
+      --ink: #18201d;
+      --muted: #66706b;
+      --line: #d8ded8;
+      --panel: #ffffff;
+      --soft: #eef3ef;
+      --accent: #23795f;
+      --accent-2: #a35f00;
+      --danger: #b3261e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: #fbfcf8;
+      padding: 18px;
+    }
+    main { padding: 18px 22px 40px; }
+    h1 { margin: 0 0 18px; font-size: 20px; font-weight: 750; letter-spacing: 0; }
+    h2 { margin: 0 0 12px; font-size: 16px; font-weight: 700; letter-spacing: 0; }
+    label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+    input, select, button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 11px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+    button {
+      cursor: pointer;
+      font-weight: 700;
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    button.secondary { background: #fff; color: var(--ink); border-color: var(--line); }
+    button.inline { width: auto; min-width: 108px; padding: 8px 10px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { min-width: 0; }
+    .topbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 16px; }
+    .tab {
+      width: auto;
+      padding: 8px 10px;
+      background: transparent;
+      color: var(--muted);
+      border-color: transparent;
+    }
+    .tab.active { color: var(--ink); background: var(--soft); border-color: var(--line); }
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .muted { color: var(--muted); }
+    .error { color: var(--danger); white-space: pre-wrap; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 26px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      margin: 0 6px 6px 0;
+    }
+    .pill.ok { background: #dff2e8; color: #0d5d44; }
+    .pill.warn { background: #fff0d6; color: #7a4700; }
+    .pill.bad { background: #fde5e2; color: #8b1d16; }
+    .list { display: grid; gap: 8px; }
+    .item {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    .item:first-child { border-top: 0; padding-top: 0; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .run-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 9px 0;
+      border-top: 1px solid var(--line);
+    }
+    .run-row:first-child { border-top: 0; }
+    .branch {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .branch:first-child { border-top: 0; }
+    .branch input { width: 16px; height: 16px; padding: 0; margin-top: 2px; }
+    .steps { margin-top: 8px; display: grid; gap: 5px; }
+    .step {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) 92px;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #f8faf6;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    @media (max-width: 820px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      main { padding: 16px; }
+      .topbar { align-items: stretch; flex-direction: column; }
+      .row { flex-direction: column; align-items: stretch; }
+      button.inline { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <h1>Telegram Bot QA Panel</h1>
+      <label for="panelToken">Panel token</label>
+      <input id="panelToken" type="password" autocomplete="off" placeholder="optional if PANEL_TOKEN is empty">
+      <label for="botUsername">Bot username</label>
+      <input id="botUsername" autocomplete="off" placeholder="@example_bot">
+      <label for="startPayload">Start payload</label>
+      <input id="startPayload" autocomplete="off" placeholder="optional">
+      <div class="row">
+        <div style="flex:1">
+          <label for="suite">Mode</label>
+          <select id="suite">
+            <option value="generated_scenarios">Map + AI + test branches</option>
+            <option value="discover_mtproto">Map only</option>
+          </select>
+        </div>
+        <div style="width:120px">
+          <label for="maxDrafts">Max</label>
+          <input id="maxDrafts" type="number" min="1" max="50" value="8">
+        </div>
+      </div>
+      <label for="selector">Branch selector</label>
+      <select id="selector">
+        <option value="smart">smart</option>
+        <option value="safe">safe</option>
+        <option value="all-safe">all-safe</option>
+        <option value="runnable">runnable</option>
+        <option value="dev">dev / test bot</option>
+      </select>
+      <div class="row" style="margin-top:14px">
+        <button id="startRun">Start</button>
+        <button id="refresh" class="secondary">Refresh</button>
+      </div>
+      <div class="section" style="margin-top:16px">
+        <h2>Recent runs</h2>
+        <div id="runList" class="list muted">Loading...</div>
+      </div>
+    </aside>
+    <main>
+      <div class="topbar">
+        <div>
+          <h1 id="runTitle">No run selected</h1>
+          <div id="runMeta" class="muted">Create a run or choose one from the left.</div>
+        </div>
+        <button id="runSelected" class="inline secondary">Run selected</button>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="progress">Progress</button>
+        <button class="tab" data-tab="documents">Documents</button>
+        <button class="tab" data-tab="tree">Logic tree</button>
+        <button class="tab" data-tab="branches">Branches</button>
+        <button class="tab" data-tab="ai">AI review</button>
+      </div>
+      <div id="message" class="error"></div>
+      <section id="tab-progress" class="section"><h2>Progress</h2><div class="muted">No run selected.</div></section>
+      <section id="tab-documents" class="section" hidden><h2>Documents</h2><div class="muted">No run selected.</div></section>
+      <section id="tab-tree" class="section" hidden><h2>Logic tree</h2><div class="muted">No run selected.</div></section>
+      <section id="tab-branches" class="section" hidden><h2>Branches</h2><div class="muted">No run selected.</div></section>
+      <section id="tab-ai" class="section" hidden><h2>AI review</h2><div class="muted">No run selected.</div></section>
+    </main>
+  </div>
+  <script>
+    const state = { runId: new URLSearchParams(location.search).get("run") || "", poll: null };
+    const q = (selector) => document.querySelector(selector);
+    const qa = (selector) => Array.from(document.querySelectorAll(selector));
+
+    function getToken() {
+      const fromInput = q("#panelToken").value.trim();
+      const fromStorage = localStorage.getItem("telegramQaPanelToken") || "";
+      const fromUrl = new URLSearchParams(location.search).get("token") || "";
+      return fromInput || fromStorage || fromUrl;
+    }
+
+    function setTokenFromUrl() {
+      const token = new URLSearchParams(location.search).get("token") || localStorage.getItem("telegramQaPanelToken") || "";
+      q("#panelToken").value = token;
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+      }[char]));
+    }
+
+    async function api(path, options = {}) {
+      const headers = Object.assign({ "content-type": "application/json" }, options.headers || {});
+      const token = getToken();
+      if (token) headers["x-panel-token"] = token;
+      const response = await fetch(path, Object.assign({}, options, { headers }));
+      const text = await response.text();
+      let payload = {};
+      try { payload = text ? JSON.parse(text) : {}; } catch (_) { payload = { error: text }; }
+      if (!response.ok) throw new Error(payload.error || text || ("HTTP " + response.status));
+      return payload;
+    }
+
+    function pill(text, kind) {
+      return '<span class="pill ' + (kind || "") + '">' + escapeHtml(text) + '</span>';
+    }
+
+    function statusKind(value) {
+      const text = String(value || "").toLowerCase();
+      if (text === "success" || text === "completed") return "ok";
+      if (text === "failure" || text === "cancelled" || text === "timed_out") return "bad";
+      if (text === "queued" || text === "running" || text === "in_progress") return "warn";
+      return "";
+    }
+
+    function setMessage(text) {
+      q("#message").textContent = text || "";
+    }
+
+    async function loadRuns() {
+      const payload = await api("/api/runs");
+      const runs = payload.runs || [];
+      q("#runList").innerHTML = runs.length ? runs.map((run) => {
+        return '<div class="run-row"><div><b>' + escapeHtml(run.bot_username || run.id) + '</b><div class="muted mono">' +
+          escapeHtml((run.status || "queued") + " · " + (run.created_at || "")) +
+          '</div></div><button class="inline secondary" data-open-run="' + escapeHtml(run.id) + '">Open</button></div>';
+      }).join("") : '<div class="muted">No runs yet.</div>';
+      qa("[data-open-run]").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.runId = button.getAttribute("data-open-run") || "";
+          history.replaceState(null, "", state.runId ? "?run=" + encodeURIComponent(state.runId) : location.pathname);
+          loadRun();
+        });
+      });
+    }
+
+    function renderJobs(github) {
+      const jobs = github && Array.isArray(github.jobs) ? github.jobs : [];
+      if (!jobs.length) return '<div class="muted">GitHub job details are not available yet.</div>';
+      return jobs.map((job) => {
+        const steps = Array.isArray(job.steps) ? job.steps : [];
+        return '<div class="item"><b>' + escapeHtml(job.name || "job") + '</b> ' +
+          pill(job.status || "unknown", statusKind(job.conclusion || job.status)) +
+          (job.conclusion ? pill(job.conclusion, statusKind(job.conclusion)) : "") +
+          '<div class="steps">' + steps.map((step) => {
+            return '<div class="step"><span class="mono">' + escapeHtml(step.number || "") + '</span><span>' +
+              escapeHtml(step.name || "") + '</span><span>' + escapeHtml(step.conclusion || step.status || "") + '</span></div>';
+          }).join("") + '</div></div>';
+      }).join("");
+    }
+
+    function renderDocuments(run) {
+      const suite = run.generated_suite || {};
+      const ai = run.generated_suite_ai_review || {};
+      const docs = [];
+      if (Array.isArray(suite.source_artifacts)) {
+        suite.source_artifacts.forEach((name) => docs.push(name));
+      }
+      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
+        if (!docs.includes(name)) docs.push(name);
+      });
+      return '<h2>Documents</h2><div class="list">' + docs.map((name) => {
+        const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
+          suite.report_file === name || ai.report_file === name;
+        return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
+          '<span class="mono">' + escapeHtml(name) + '</span></div>';
+      }).join("") + '</div>';
+    }
+
+    function renderBranches(run) {
+      const drafts = run.drafts || [];
+      const reviews = Array.isArray((run.generated_suite_ai_review || {}).branch_reviews)
+        ? run.generated_suite_ai_review.branch_reviews
+        : [];
+      const reviewByDraft = new Map(reviews.map((review) => [String(review.draft_id || ""), review]));
+      if (!drafts.length) return '<h2>Branches</h2><div class="muted">No generated branches yet. Wait for discovery/extraction.</div>';
+      return '<h2>Branches</h2>' + drafts.map((draft) => {
+        const review = reviewByDraft.get(String(draft.id || "")) || {};
+        const meta = [
+          draft.status,
+          draft.source_type,
+          draft.ai_severity,
+          draft.step_count ? (draft.passed_steps + "/" + draft.step_count + " steps") : ""
+        ].filter(Boolean).join(" · ");
+        return '<label class="branch"><input type="checkbox" value="' + escapeHtml(draft.id) + '">' +
+          '<div><b class="mono">' + escapeHtml(draft.id) + '</b><div>' + escapeHtml(draft.scenario || "") +
+          '</div><div class="muted">' + escapeHtml(meta) + '</div>' +
+          (review.intended_behavior ? '<div><b>Expected:</b> ' + escapeHtml(review.intended_behavior) + '</div>' : '') +
+          (review.observed_behavior ? '<div><b>Observed:</b> ' + escapeHtml(review.observed_behavior) + '</div>' : '') +
+          (Array.isArray(review.defects) && review.defects.length ? '<div class="error">' + escapeHtml(review.defects.join(" | ")) + '</div>' : '') +
+          (draft.first_error ? '<div class="error">' + escapeHtml(draft.first_error) + '</div>' : '') +
+          '</div>' + pill(draft.status || "new", statusKind(draft.status)) + '</label>';
+      }).join("");
+    }
+
+    function renderLogicTree(run) {
+      const review = run.generated_suite_ai_review || {};
+      const flows = Array.isArray(review.flow_map) ? review.flow_map : [];
+      if (!flows.length) {
+        return '<h2>Logic tree</h2><div class="muted">AI flow map is not available yet. Showing generated branches.</div>' +
+          renderBranches(run);
+      }
+      return '<h2>Logic tree</h2>' + flows.map((flow) => {
+        const branches = Array.isArray(flow.branches) ? flow.branches : [];
+        return '<div class="item"><b>' + escapeHtml(flow.name || "flow") + '</b> ' +
+          pill(flow.criticality || "medium", statusKind(flow.criticality)) +
+          '<div>' + escapeHtml(flow.purpose || "") + '</div>' +
+          '<div class="steps">' + branches.map((branch, index) => {
+            return '<div class="step"><span class="mono">' + escapeHtml(index + 1) + '</span><span>' +
+              escapeHtml(branch) + '</span><span>branch</span></div>';
+          }).join("") + '</div></div>';
+      }).join("");
+    }
+
+    function renderAi(run) {
+      const review = run.generated_suite_ai_review || {};
+      const overview = review.overview || {};
+      const defects = Array.isArray(review.defects) ? review.defects : [];
+      const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
+      const next = review.next_run || {};
+      return '<h2>AI review</h2>' +
+        '<div class="item"><b>Overview</b><p>' + escapeHtml(overview.summary || "No AI review yet.") + '</p>' +
+        '<div class="muted">' + escapeHtml(overview.product_purpose || "") + '</div></div>' +
+        '<div class="item"><b>Defects</b>' + (defects.length ? defects.map((item) => {
+          return '<div class="item">' + pill(item.severity || "unknown", statusKind(item.severity)) +
+            '<b>' + escapeHtml(item.title || "") + '</b><div class="muted">' + escapeHtml((item.evidence || []).join(" | ")) +
+            '</div><div>' + escapeHtml(item.next_check || "") + '</div></div>';
+        }).join("") : '<div class="muted">No defects in callback payload yet.</div>') + '</div>' +
+        '<div class="item"><b>Coverage gaps</b><pre>' + escapeHtml(gaps.join("\\n") || "No gaps yet.") + '</pre></div>' +
+        '<div class="item"><b>Next run</b><pre>' + escapeHtml(JSON.stringify(next, null, 2)) + '</pre></div>';
+    }
+
+    function renderRun(payload) {
+      const run = payload.run || {};
+      const github = run.github_live || run.github || {};
+      const status = github.conclusion || github.status || run.status || "queued";
+      const bot = run.bot_username || "";
+      q("#runTitle").textContent = bot ? bot + " · " + status : run.id || "Run";
+      q("#runMeta").innerHTML = [
+        pill(run.suite || "generated_scenarios"),
+        pill(run.selector || "smart"),
+        pill(status, statusKind(status)),
+        github.html_url ? '<a href="' + escapeHtml(github.html_url) + '" target="_blank" rel="noreferrer">GitHub run</a>' : ''
+      ].join(" ");
+      q("#tab-progress").innerHTML = '<h2>Progress</h2><div>' +
+        pill(run.status || "queued", statusKind(run.status)) +
+        (run.github_run_id ? pill("run " + run.github_run_id) : "") +
+        '</div><div class="item"><b>Events</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
+          return '<div class="item"><span class="mono">' + escapeHtml(event.time || "") + '</span> ' +
+            escapeHtml([event.phase, event.status, event.message].filter(Boolean).join(" · ")) + '</div>';
+        }).join("") : '<div class="muted">No events yet.</div>') + '</div>' + renderJobs(github);
+      q("#tab-documents").innerHTML = renderDocuments(run);
+      q("#tab-tree").innerHTML = renderLogicTree(run);
+      q("#tab-branches").innerHTML = renderBranches(run);
+      q("#tab-ai").innerHTML = renderAi(run);
+      if (run.bot_username) q("#botUsername").value = run.bot_username;
+      if (run.start_payload) q("#startPayload").value = run.start_payload;
+      if (run.suite) q("#suite").value = run.suite;
+      if (run.selector) q("#selector").value = ["smart", "safe", "all-safe", "runnable", "dev"].includes(run.selector) ? run.selector : "smart";
+      if (run.max_drafts) q("#maxDrafts").value = run.max_drafts;
+      const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running"].includes(String(status).toLowerCase());
+      if (keepPolling) schedulePoll();
+    }
+
+    async function loadRun() {
+      if (!state.runId) return;
+      setMessage("");
+      const payload = await api("/api/runs/" + encodeURIComponent(state.runId));
+      renderRun(payload);
+    }
+
+    function schedulePoll() {
+      if (state.poll) clearTimeout(state.poll);
+      state.poll = setTimeout(() => {
+        loadRun().catch((error) => setMessage(error.message));
+      }, 5000);
+    }
+
+    async function createRun(selectorOverride) {
+      setMessage("");
+      const token = q("#panelToken").value.trim();
+      if (token) localStorage.setItem("telegramQaPanelToken", token);
+      const body = {
+        bot_username: q("#botUsername").value.trim(),
+        start_payload: q("#startPayload").value.trim(),
+        suite: q("#suite").value,
+        selector: selectorOverride || q("#selector").value,
+        max_drafts: q("#maxDrafts").value
+      };
+      const payload = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
+      state.runId = payload.run.id;
+      history.replaceState(null, "", "?run=" + encodeURIComponent(state.runId));
+      await loadRuns();
+      renderRun(payload);
+    }
+
+    qa(".tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        qa(".tab").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        const name = button.getAttribute("data-tab");
+        ["progress", "documents", "tree", "branches", "ai"].forEach((tab) => {
+          q("#tab-" + tab).hidden = tab !== name;
+        });
+      });
+    });
+    q("#startRun").addEventListener("click", () => createRun().catch((error) => setMessage(error.message)));
+    q("#refresh").addEventListener("click", () => Promise.all([loadRuns(), loadRun()]).catch((error) => setMessage(error.message)));
+    q("#runSelected").addEventListener("click", () => {
+      const ids = qa('#tab-branches input[type="checkbox"]:checked').map((input) => input.value).filter(Boolean);
+      if (!ids.length) {
+        setMessage("Select at least one branch.");
+        return;
+      }
+      q("#suite").value = "generated_scenarios";
+      createRun(ids.join(",")).catch((error) => setMessage(error.message));
+    });
+    setTokenFromUrl();
+    loadRuns().catch((error) => setMessage(error.message));
+    if (state.runId) loadRun().catch((error) => setMessage(error.message));
+  </script>
+</body>
+</html>`;
+}
+
+async function handlePanelPage() {
+  return htmlResponse(panelHtml());
+}
+
+async function handlePanelRunCreate(env, request) {
+  const authResponse = requirePanelAuthorization(env, request);
+  if (authResponse) {
+    return authResponse;
+  }
+  if (!env.BOT_STATE_KV) {
+    return jsonResponse({ error: "BOT_STATE_KV binding is required" }, 500);
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const botUsername = normalizeBotUsername(body.bot_username);
+  if (!botUsername) {
+    return jsonResponse({ error: "Valid bot_username is required" }, 400);
+  }
+
+  const suite = normalizeSuite(body.suite, "generated_scenarios");
+  if (!["generated_scenarios", "discover_mtproto"].includes(suite)) {
+    return jsonResponse({ error: "Panel supports generated_scenarios and discover_mtproto only" }, 400);
+  }
+  const selector = suite === "generated_scenarios" ? String(body.selector || "smart").trim() || "smart" : "";
+  const maxDrafts = clampNumber(body.max_drafts, 8, 1, 50);
+  const panelRunId = crypto.randomUUID();
+  const callbackUrl = String(env.REPORT_CALLBACK_URL || "").trim() || new URL("/github/report", request.url).toString();
+  const createdAt = nowIso();
+  let run = appendPanelEvent(
+    {
+      id: panelRunId,
+      status: "queued",
+      bot_username: `@${botUsername}`,
+      start_payload: String(body.start_payload || "").trim(),
+      suite,
+      selector,
+      max_drafts: maxDrafts,
+      created_at: createdAt,
+      updated_at: createdAt
+    },
+    { phase: "created", status: "queued", message: "Panel run created" }
+  );
+  await savePanelRun(env, run);
+
+  try {
+    const dispatch = await dispatchGithubRun(env, {
+      chatId: "",
+      lang: LANG_RU,
+      scenarioKey: scenarioKeyForRun(suite, selector),
+      suite,
+      generatedScenarioDrafts: suite === "generated_scenarios" ? selector : "",
+      botUsername,
+      startPayload: run.start_payload,
+      panelRunId,
+      maxDrafts,
+      reportCallbackUrlOverride: callbackUrl
+    });
+    run = appendPanelEvent(
+      {
+        ...run,
+        status: dispatch.status || "requested",
+        github_run_id: dispatch.runId || runIdFromUrl(dispatch.runUrl),
+        github_run_url: dispatch.runUrl,
+        updated_at: nowIso()
+      },
+      { phase: "github", status: dispatch.status || "requested", message: "GitHub Actions run dispatched" }
+    );
+    await savePanelRun(env, run);
+    return jsonResponse({ run });
+  } catch (error) {
+    run = appendPanelEvent(
+      {
+        ...run,
+        status: "dispatch_failed",
+        error: error instanceof Error ? error.message : String(error),
+        updated_at: nowIso()
+      },
+      { phase: "github", status: "dispatch_failed", message: error instanceof Error ? error.message : String(error) }
+    );
+    await savePanelRun(env, run);
+    return jsonResponse({ error: run.error, run }, 500);
+  }
+}
+
+async function handlePanelRunList(env, request) {
+  const authResponse = requirePanelAuthorization(env, request);
+  if (authResponse) {
+    return authResponse;
+  }
+  return jsonResponse({ runs: await listPanelRuns(env) });
+}
+
+async function handlePanelRunGet(env, request, id) {
+  const authResponse = requirePanelAuthorization(env, request);
+  if (authResponse) {
+    return authResponse;
+  }
+  const run = await loadPanelRun(env, id);
+  if (!run) {
+    return jsonResponse({ error: "Run not found" }, 404);
+  }
+  const responseRun = {
+    ...run,
+    drafts: compactPanelDrafts(run.generated_suite)
+  };
+  try {
+    const runId = responseRun.github_run_id || runIdFromUrl(responseRun.github_run_url);
+    const githubLive = await fetchGithubRunDetails(env, runId);
+    if (githubLive) {
+      responseRun.github_live = githubLive;
+    }
+  } catch (error) {
+    responseRun.github_error = error instanceof Error ? error.message : String(error);
+  }
+  return jsonResponse({ run: responseRun });
+}
+
+async function updatePanelRunFromReport(env, payload) {
+  const panelRunId = String(payload.panel_run_id || "").trim();
+  if (!panelRunId || !env.BOT_STATE_KV) {
+    return;
+  }
+  const current = (await loadPanelRun(env, panelRunId)) || {
+    id: panelRunId,
+    status: "reported",
+    created_at: nowIso(),
+    events: []
+  };
+  const phase = String(payload.phase || "callback").trim() || "callback";
+  const status = String(payload.status || current.status || "").trim() || "reported";
+  let next = {
+    ...current,
+    status,
+    updated_at: nowIso(),
+    duration_sec: Number.isFinite(Number(payload.duration_sec)) ? Number(payload.duration_sec) : current.duration_sec,
+    github_run_url: String(payload.run_url || current.github_run_url || ""),
+    github_run_id: current.github_run_id || runIdFromUrl(payload.run_url),
+    generated_suite: payload.generated_suite || current.generated_suite,
+    generated_suite_ai_review: payload.generated_suite_ai_review || current.generated_suite_ai_review,
+    screenshot_count: Number.isFinite(Number(payload.screenshot_count))
+      ? Number(payload.screenshot_count)
+      : current.screenshot_count
+  };
+  if (phase === "finish" || phase === "single") {
+    next.completed_at = nowIso();
+  }
+  next = appendPanelEvent(next, {
+    phase,
+    status,
+    message: payload.failure_message || (payload.generated_suite ? "Generated suite received" : "Callback received")
+  });
+  await savePanelRun(env, next);
+}
+
 async function handleGithubReport(env, request) {
   const tokenHeader = String(request.headers.get("x-report-token") || "").trim();
   if (!tokenHeader || tokenHeader !== String(env.REPORT_TOKEN || "").trim()) {
@@ -443,9 +1619,15 @@ async function handleGithubReport(env, request) {
     return new Response("Invalid JSON", { status: 400 });
   }
 
+  await updatePanelRunFromReport(env, payload);
+
   const chatId = normalizeChatId(payload.chat_id);
-  if (!chatId) {
+  const panelRunId = String(payload.panel_run_id || "").trim();
+  if (!chatId && !panelRunId) {
     return new Response("chat_id is required", { status: 400 });
+  }
+  if (!chatId) {
+    return new Response("ok");
   }
 
   const state = await loadState(env, chatId);
@@ -456,6 +1638,8 @@ async function handleGithubReport(env, request) {
   const statusLine = runStatusText(lang, payload.status || "failure");
   const phase = String(payload.phase || "single").trim().toLowerCase();
   const failureReason = failureReasonText(lang, payload.failure_code, payload.failure_message);
+  const generatedSuiteText = formatGeneratedSuiteText(lang, payload.generated_suite);
+  const generatedSuiteAiReviewText = formatGeneratedSuiteAiReviewText(lang, payload.generated_suite_ai_review);
 
   const reportText = [
     t(lang, "reportTitle"),
@@ -463,7 +1647,9 @@ async function handleGithubReport(env, request) {
     `${t(lang, "reportStatus")}: ${statusLine}`,
     failureReason ? `${t(lang, "reportReason")}: ${failureReason}` : "",
     `${t(lang, "reportDuration")}: ${duration}`,
-    runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : ""
+    runUrl ? `${t(lang, "reportLink")}: ${runUrl}` : "",
+    generatedSuiteText,
+    generatedSuiteAiReviewText
   ]
     .filter(Boolean)
     .join("\n");
@@ -550,9 +1736,16 @@ async function handleTelegramWebhook(env, request) {
 
     if (/^\/run\b/i.test(text)) {
       const state = await loadState(env, chatId);
-      const parts = text.split(/\s+/).filter(Boolean);
-      const requestedLang = normalizeLang(parts[1] || state.lang || LANG_RU);
-      await triggerScenarioRun(env, chatId, requestedLang, SCENARIO_START_FINISH);
+      const parsed = parseRunText(text, state.lang || LANG_RU, env.DEFAULT_SUITE || "autorun");
+      if (parsed.error) {
+        await sendMessage(env, chatId, `${parsed.error}\nAllowed suites: ${Array.from(REQUIRED_SUITES).join(", ")}`);
+        return new Response("ok");
+      }
+      await triggerScenarioRun(env, chatId, parsed.lang, parsed.scenarioKey, {
+        suite: parsed.suite,
+        generatedScenarioDraft: parsed.generatedScenarioDraft,
+        generatedScenarioDrafts: parsed.generatedScenarioDrafts
+      });
       return new Response("ok");
     }
 
@@ -590,6 +1783,19 @@ async function handleTelegramWebhook(env, request) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/panel") {
+      return handlePanelPage(env, request);
+    }
+    if (url.pathname === "/api/runs" && request.method === "GET") {
+      return handlePanelRunList(env, request);
+    }
+    if (url.pathname === "/api/runs" && request.method === "POST") {
+      return handlePanelRunCreate(env, request);
+    }
+    const panelRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+    if (panelRunMatch && request.method === "GET") {
+      return handlePanelRunGet(env, request, panelRunMatch[1]);
+    }
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
       return handleTelegramWebhook(env, request);
     }
