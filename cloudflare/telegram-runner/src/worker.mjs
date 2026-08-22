@@ -343,11 +343,26 @@ async function refreshPanelRunTerminalState(env, run) {
         return next;
       }
       if (details?.status === "complete" && !isTerminalPanelRun(run)) {
+        const latestRun = await loadPanelRun(env, run.id).catch(() => null);
+        const sourceRun =
+          latestRun && String(latestRun.updated_at || "") >= String(run.updated_at || "") ? latestRun : run;
+        if (isTerminalPanelRun(sourceRun)) {
+          const next = {
+            ...sourceRun,
+            workflow_status: details.status,
+            completed_at: sourceRun.completed_at || nowIso()
+          };
+          await savePanelRun(env, next);
+          return next;
+        }
         const outputStatus = String(details.output?.status || "").trim();
+        if (outputStatus === "success" && !sourceRun.cloudflare_run && !sourceRun.generated_suite && !sourceRun.bot_map) {
+          return { ...sourceRun, workflow_status: details.status };
+        }
         const nextStatus = PANEL_TERMINAL_STATUSES.has(outputStatus) ? outputStatus : "completed";
         const next = appendPanelEvent(
           {
-            ...run,
+            ...sourceRun,
             status: nextStatus,
             workflow_status: details.status,
             updated_at: nowIso(),
