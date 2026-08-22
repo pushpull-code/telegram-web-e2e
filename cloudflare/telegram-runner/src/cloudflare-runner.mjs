@@ -1,6 +1,6 @@
 const DEFAULT_DISCOVERY_COMMANDS = "/join_task,/my_tasks,/settings,/view_earnings";
 const DEFAULT_DENY_BUTTON_RE =
-  "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|оплат|pay|buy|purchase";
+  "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|aufgabe abschlie|abschlie(?:ss|ß)en|beenden|fertig|оплат|pay|buy|purchase";
 const DEFAULT_COUNTRY_LOOKUP_URLS = "https://ipapi.co/json/,https://ipwho.is/";
 const ARTIFACT_TTL_SECONDS = 60 * 60 * 24 * 14;
 const SETTINGS_COMMAND = "/settings";
