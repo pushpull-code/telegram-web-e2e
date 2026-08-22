@@ -1913,19 +1913,27 @@ function panelHtml() {
     function renderDocuments(run) {
       const suite = run.generated_suite || {};
       const ai = run.generated_suite_ai_review || {};
+      const isCloudflare = run.engine === "cloudflare";
       const docs = [];
       if (Array.isArray(suite.source_artifacts)) {
         suite.source_artifacts.forEach((name) => docs.push(name));
       }
-      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "followed-actions.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
+      const requiredDocs = isCloudflare
+        ? ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "cloudflare-mtproto-report.json"]
+        : ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "followed-actions.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"];
+      requiredDocs.forEach((name) => {
         if (!docs.includes(name)) docs.push(name);
       });
+      if (isCloudflare && ai && Object.keys(ai).length > 0 && !docs.includes("cloudflare-ai-review.json")) {
+        docs.push("cloudflare-ai-review.json");
+      }
       return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
           suite.report_file === name || ai.report_file === name ||
           (name === "bot-map.json" && (suite.bot_map || run.bot_map)) ||
           (name === "webapp-handoffs.json" && Array.isArray(suite.webapp_handoffs) && suite.webapp_handoffs.length > 0) ||
-          (name === "followed-actions.json" && Array.isArray(suite.followed_actions) && suite.followed_actions.length > 0);
+          (name === "followed-actions.json" && Array.isArray(suite.followed_actions) && suite.followed_actions.length > 0) ||
+          (name === "cloudflare-ai-review.json" && ai && Object.keys(ai).length > 0);
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
           '<span class="mono">' + escapeHtml(name) + '</span></div>';
       }).join("") + '</div>';
