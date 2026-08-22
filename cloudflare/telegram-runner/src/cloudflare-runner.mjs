@@ -21,6 +21,22 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatDurationSeconds(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  const parts = [];
+  if (hours) {
+    parts.push(`${hours}ч`);
+  }
+  if (minutes || hours) {
+    parts.push(`${minutes}м`);
+  }
+  parts.push(`${rest}с`);
+  return parts.join(" ");
+}
+
 async function notifyProgress(onProgress, event) {
   if (typeof onProgress !== "function") {
     return;
@@ -653,7 +669,11 @@ async function mtprotoRequest(env, path, body) {
           await sleep((floodWaitSeconds + 1) * 1000);
           continue;
         }
-        throw new Error(errorText);
+        const waitText =
+          Number.isFinite(floodWaitSeconds) && floodWaitSeconds > 0
+            ? `: подождать ${formatDurationSeconds(floodWaitSeconds)}`
+            : "";
+        throw new Error(`Telegram flood-limit${waitText}. ${errorText}`);
       }
       const retryable = response.status >= 500 || /send_failed|timeout|temporar|rate/i.test(payloadText);
       if (!retryable || attempt >= maxAttempts) {
