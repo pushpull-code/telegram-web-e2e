@@ -3,7 +3,7 @@ main = "src/worker.mjs"
 compatibility_date = "2026-03-06"
 
 kv_namespaces = [
-  { binding = "BOT_STATE_KV", id = "4dfcd4fc0c8a464fb006e939e206a290", preview_id = "24b98905bf4a4906b120961b909f88f6" }
+  { binding = "BOT_STATE_KV", id = "dfd4b24b750a4ad19497a9531f44422c", preview_id = "1624c0302b314c939ccbcf51c49f5efa" }
 ]
 
 [vars]
