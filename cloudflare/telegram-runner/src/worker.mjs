@@ -383,7 +383,12 @@ async function refreshPanelRunTerminalState(env, run) {
         }
         const outputStatus = String(details.output?.status || "").trim();
         if (outputStatus === "success" && !sourceRun.cloudflare_run && !sourceRun.generated_suite && !sourceRun.bot_map) {
-          return { ...sourceRun, workflow_status: details.status };
+          return {
+            ...sourceRun,
+            status: "syncing_result",
+            workflow_status: details.status,
+            workflow_output_status: outputStatus
+          };
         }
         const nextStatus = PANEL_TERMINAL_STATUSES.has(outputStatus) ? outputStatus : "completed";
         const workflowError =
@@ -1627,7 +1632,7 @@ function panelHtml() {
       const text = String(value || "").toLowerCase();
       if (text === "success" || text === "completed" || text === "passed" || text === "pass") return "ok";
       if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high" || text === "browser_run_failed") return "bad";
-      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "cancel_requested" || text === "warning" || text === "medium" || text === "pending_browser_run" || text === "limited_out") return "warn";
+      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "syncing_result" || text === "cancel_requested" || text === "warning" || text === "medium" || text === "pending_browser_run" || text === "limited_out") return "warn";
       return "";
     }
 
@@ -1652,6 +1657,7 @@ function panelHtml() {
         pending: "ожидание",
         running: "выполняется",
         in_progress: "выполняется",
+        syncing_result: "синхронизирую результат",
         completed: "завершён",
         success: "успешно",
         failure: "ошибка",
@@ -1746,6 +1752,7 @@ function panelHtml() {
         const lines = [
           run.workflow_instance_id ? "workflow: " + run.workflow_instance_id : "",
           run.workflow_status ? "workflow статус: " + uiLabel(run.workflow_status) : "",
+          run.workflow_output_status ? "workflow output: " + uiLabel(run.workflow_output_status) : "",
           cf.runner ? "runner: " + cf.runner : "runner: cloudflare-mtproto",
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
@@ -1959,7 +1966,7 @@ function panelHtml() {
       if (run.engine) q("#engine").value = run.engine === "github" ? "github" : "cloudflare";
       if (run.selector) q("#selector").value = ["smart", "safe", "all-safe", "runnable", "dev"].includes(run.selector) ? run.selector : "smart";
       if (run.max_drafts) q("#maxDrafts").value = run.max_drafts;
-      const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running", "cancel_requested"].includes(String(status).toLowerCase());
+      const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running", "syncing_result", "cancel_requested"].includes(String(status).toLowerCase());
       const canCancel = state.runId && (isLiveStatus(status) || isLiveStatus(run.status));
       q("#cancelRun").hidden = !canCancel;
       q("#cancelRun").disabled = state.cancelling;
