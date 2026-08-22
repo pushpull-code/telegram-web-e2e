@@ -545,6 +545,8 @@ function generatedSuiteLabel(lang, key) {
       webappHandoffs: "WebApp/URL",
       webappHandoffsAudited: "WebApp проверено",
       webappScreenshots: "скриншотов",
+      followedActions: "выполнено действий",
+      telegramClicks: "Telegram кликов",
       more: "\u0435\u0449\u0435",
       branches: "\u0432\u0435\u0442\u043e\u043a"
     },
@@ -567,6 +569,8 @@ function generatedSuiteLabel(lang, key) {
       webappHandoffs: "WebApp/URL",
       webappHandoffsAudited: "WebApp audited",
       webappScreenshots: "screenshots",
+      followedActions: "followed actions",
+      telegramClicks: "Telegram clicks",
       more: "more",
       branches: "branches"
     }
@@ -642,6 +646,12 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
     }
     if (numberOrZero(coverage.webappScreenshots) > 0) {
       coverageParts.push(`${generatedSuiteLabel(lang, "webappScreenshots")}: ${numberOrZero(coverage.webappScreenshots)}`);
+    }
+    if (numberOrZero(coverage.followedActions) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "followedActions")}: ${numberOrZero(coverage.followedActions)}`);
+    }
+    if (numberOrZero(coverage.telegramClicks) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "telegramClicks")}: ${numberOrZero(coverage.telegramClicks)}`);
     }
     if (numberOrZero(coverage.limitedOut) > 0) {
       coverageParts.push(`${generatedSuiteLabel(lang, "limitedOut")}: ${numberOrZero(coverage.limitedOut)}`);
@@ -1595,7 +1605,7 @@ function panelHtml() {
         </div>
         <div style="width:120px">
           <label for="maxDrafts">Лимит</label>
-          <input id="maxDrafts" type="number" min="1" max="50" value="8">
+          <input id="maxDrafts" type="number" min="1" max="50" value="20">
         </div>
       </div>
       <label for="engine">Движок</label>
@@ -1605,11 +1615,11 @@ function panelHtml() {
       </select>
       <label for="selector">Выбор веток</label>
       <select id="selector">
+        <option value="dev">полный dev/test проход</option>
         <option value="smart">умный выбор</option>
         <option value="safe">только безопасные</option>
         <option value="all-safe">все безопасные</option>
         <option value="runnable">все исполняемые</option>
-        <option value="dev">dev/test бот</option>
       </select>
       <div class="row" style="margin-top:14px">
         <button id="startRun">Запустить</button>
@@ -1714,7 +1724,9 @@ function panelHtml() {
         safe: "безопасные",
         "all-safe": "все безопасные",
         runnable: "исполняемые",
-        dev: "dev/test",
+        dev: "полный dev/test",
+        telegram_button_click: "Telegram click",
+        browser_webapp_audit: "Browser WebApp",
         queued: "в очереди",
         requested: "запрошен",
         waiting: "ожидание",
@@ -1887,6 +1899,8 @@ function panelHtml() {
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
           Number.isFinite(Number(cf.webapp_screenshot_count)) ? "WebApp скриншотов: " + cf.webapp_screenshot_count : "",
+          Number.isFinite(Number((run.generated_suite || {}).coverage?.followedActions)) ? "выполнено действий: " + (run.generated_suite || {}).coverage.followedActions : "",
+          Number.isFinite(Number((run.generated_suite || {}).coverage?.telegramClicks)) ? "Telegram кликов: " + (run.generated_suite || {}).coverage.telegramClicks : "",
           cf.ai_model ? "AI: " + cf.ai_model : "",
           run.error ? "ошибка: " + run.error : "",
           run.duration_sec ? "время: " + run.duration_sec + " сек." : ""
@@ -1903,14 +1917,15 @@ function panelHtml() {
       if (Array.isArray(suite.source_artifacts)) {
         suite.source_artifacts.forEach((name) => docs.push(name));
       }
-      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
+      ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "followed-actions.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"].forEach((name) => {
         if (!docs.includes(name)) docs.push(name);
       });
       return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
           suite.report_file === name || ai.report_file === name ||
           (name === "bot-map.json" && (suite.bot_map || run.bot_map)) ||
-          (name === "webapp-handoffs.json" && Array.isArray(suite.webapp_handoffs) && suite.webapp_handoffs.length > 0);
+          (name === "webapp-handoffs.json" && Array.isArray(suite.webapp_handoffs) && suite.webapp_handoffs.length > 0) ||
+          (name === "followed-actions.json" && Array.isArray(suite.followed_actions) && suite.followed_actions.length > 0);
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
           '<span class="mono">' + escapeHtml(name) + '</span></div>';
       }).join("") + '</div>';
@@ -1930,6 +1945,23 @@ function panelHtml() {
           '</a>';
       }
       return shot.reason ? '<div class="muted">' + escapeHtml(shot.reason) + '</div>' : "";
+    }
+
+    function renderTelegramClickEvidence(click) {
+      if (!click || !click.enabled) return "";
+      const result = click.click?.result || {};
+      const lines = [
+        "status: " + (click.ok ? "clicked" : click.cancelled ? "cancelled" : "failed"),
+        click.button?.text ? "button: " + click.button.text : "",
+        result.kind ? "result: " + result.kind : "",
+        result.url ? "url: " + result.url : "",
+        click.error ? "error: " + click.error : ""
+      ].filter(Boolean);
+      const messages = Array.isArray(click.new_messages) ? click.new_messages : [];
+      return '<div class="item"><b>Действие по просьбе бота</b><pre>' + escapeHtml(lines.join("\\n")) + '</pre>' +
+        (messages.length ? '<div class="muted">Новые сообщения после клика</div><pre>' +
+          escapeHtml(messages.map((message) => compactUiText(message.text || "", 240)).join("\\n\\n")) + '</pre>' : '') +
+        '</div>';
     }
 
     function renderBranches(run) {
@@ -1999,6 +2031,7 @@ function panelHtml() {
       const webappHtml = webapps.length ? '<h2>WebApp/URL handoff-и</h2>' + webapps.map((handoff) => {
         const path = Array.isArray(handoff.path) && handoff.path.length ? handoff.path.join(" → ") : "/start";
         const browser = handoff.browser_run || {};
+        const telegramClick = handoff.telegram_click || {};
         const result = browser.result || {};
         return '<div class="item"><b>' + escapeHtml(handoff.button_text || "URL/WebApp") + '</b> ' +
           pill(handoff.status || "pending_browser_run", statusKind(handoff.status)) +
@@ -2010,6 +2043,7 @@ function panelHtml() {
             Array.isArray(result.main_actions) && result.main_actions.length ? "actions: " + result.main_actions.join(" | ") : "",
             Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "blockers: " + result.errors_or_blockers.join(" | ") : ""
           ].filter(Boolean).join("\\n")) + '</pre>' : '') +
+          renderTelegramClickEvidence(telegramClick) +
           renderScreenshotEvidence(browser) +
           (browser.json_error ? '<div class="error">' + escapeHtml(browser.json_error) + '</div>' : '') +
           (browser.screenshot_error ? '<div class="error">' + escapeHtml(browser.screenshot_error) + '</div>' : '') +
@@ -2029,6 +2063,7 @@ function panelHtml() {
       const webapps = Array.isArray(suite.webapp_handoffs) ? suite.webapp_handoffs : [];
       const webappHtml = webapps.length ? webapps.map((handoff) => {
         const browser = handoff.browser_run || {};
+        const telegramClick = handoff.telegram_click || {};
         const result = browser.result || {};
         const fallbackText = browser.screenshot?.url
           ? "Текстовый Browser Run разбор не получен, скриншот сохранён."
@@ -2037,6 +2072,7 @@ function panelHtml() {
           result.visible_text_summary,
           Array.isArray(result.qa_notes) && result.qa_notes.length ? result.qa_notes.join(" | ") : "",
           Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "Блокеры: " + result.errors_or_blockers.join(" | ") : "",
+          telegramClick.enabled ? "Telegram click: " + (telegramClick.ok ? "выполнен" : telegramClick.error || "не выполнен") : "",
           browser.json_error ? "JSON: " + browser.json_error : "",
           browser.screenshot_error ? "Скриншот: " + browser.screenshot_error : ""
         ].filter(Boolean).join("\\n");

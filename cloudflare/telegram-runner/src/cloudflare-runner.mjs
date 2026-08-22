@@ -1,6 +1,6 @@
 const DEFAULT_DISCOVERY_COMMANDS = "/join_task,/my_tasks,/settings,/view_earnings";
 const DEFAULT_DENY_BUTTON_RE =
-  "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|confirm|подтверд|оплат|pay|buy|purchase";
+  "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|оплат|pay|buy|purchase";
 const ARTIFACT_TTL_SECONDS = 60 * 60 * 24 * 14;
 
 function nowIso() {
@@ -280,6 +280,27 @@ async function clickMtprotoButton(env, peer, messageId, selector) {
   return mtprotoRequest(env, "/api/click-button", { ...peer, messageId, ...selector });
 }
 
+function serializeClickEvidence(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  return {
+    success: Boolean(payload.success),
+    message_id: Number(payload.messageId) || null,
+    row_index: Number.isFinite(Number(payload.rowIndex)) ? Number(payload.rowIndex) : null,
+    column_index: Number.isFinite(Number(payload.columnIndex)) ? Number(payload.columnIndex) : null,
+    button_text: String(payload.buttonText || ""),
+    result: payload.result && typeof payload.result === "object"
+      ? {
+          kind: String(payload.result.kind || ""),
+          message: compactText(payload.result.message || "", 180),
+          url: payload.result.url ? compactText(payload.result.url, 300) : "",
+          alert: typeof payload.result.alert === "boolean" ? payload.result.alert : undefined
+        }
+      : null
+  };
+}
+
 function findLatestMtprotoButton(messages, labels) {
   const normalizedLabels = labels.map(normalizeText);
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
@@ -304,18 +325,18 @@ async function startBot(env, peer, options) {
   return activeAfterMessageId;
 }
 
-async function clickPathButton(env, peer, label, options) {
+async function clickLatestButton(env, peer, label, options, clickOptions = {}) {
   const state = await getMtprotoChatState(env, peer, options.stateLimit);
   const currentMessages = messagesAfterLastOutgoing(state.messages || []);
   const found = findLatestMtprotoButton(currentMessages.length > 0 ? currentMessages : state.messages || [], [label]);
   if (!found) {
     throw new Error(`Button not found in latest chat state: ${label}`);
   }
-  if (found.button?.url) {
+  if (found.button?.url && !clickOptions.allowUrl) {
     throw new Error(`URL/WebApp button is terminal in MTProto discovery: ${label}`);
   }
 
-  await clickMtprotoButton(env, peer, found.message.id, {
+  const click = await clickMtprotoButton(env, peer, found.message.id, {
     rowIndex: found.button.rowIndex,
     columnIndex: found.button.columnIndex,
     ...(found.button.dataBase64 ? { buttonDataBase64: found.button.dataBase64 } : {}),
@@ -324,7 +345,23 @@ async function clickPathButton(env, peer, label, options) {
     clickTimeoutMs: options.clickTimeoutMs
   });
   await sleep(options.settleMs);
-  return Number(found.message.id) - 1;
+  return {
+    activeAfterMessageId: Number(found.message.id) - 1,
+    message: compactMessage(found.message),
+    button: {
+      text: String(found.button.text || ""),
+      url: found.button.url || "",
+      type: found.button.type || "",
+      rowIndex: found.button.rowIndex,
+      columnIndex: found.button.columnIndex
+    },
+    click: serializeClickEvidence(click)
+  };
+}
+
+async function clickPathButton(env, peer, label, options) {
+  const result = await clickLatestButton(env, peer, label, options);
+  return result.activeAfterMessageId;
 }
 
 async function performPathAction(env, peer, label, options) {
@@ -361,14 +398,15 @@ function discoveryOptions(env, run) {
   const devMode = ["dev", "unsafe", "runnable"].includes(selector);
   return {
     startPayload: String(run.start_payload || "").trim(),
-    maxDepth: clampNumber(devMode ? env.MTPROTO_DISCOVERY_DEV_MAX_DEPTH || 2 : env.MTPROTO_DISCOVERY_MAX_DEPTH, 1, 0, 4),
-    maxNodes: clampNumber(devMode ? env.MTPROTO_DISCOVERY_DEV_MAX_NODES || 20 : env.MTPROTO_DISCOVERY_MAX_NODES, 8, 1, 40),
-    maxButtonsPerNode: clampNumber(env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE, 8, 1, 12),
-    stateLimit: clampNumber(env.MTPROTO_DISCOVERY_STATE_LIMIT, 50, 10, 120),
+    maxDepth: clampNumber(devMode ? env.MTPROTO_DISCOVERY_DEV_MAX_DEPTH || 4 : env.MTPROTO_DISCOVERY_MAX_DEPTH, 1, 0, 8),
+    maxNodes: clampNumber(devMode ? env.MTPROTO_DISCOVERY_DEV_MAX_NODES || 60 : env.MTPROTO_DISCOVERY_MAX_NODES, 8, 1, 120),
+    maxButtonsPerNode: clampNumber(env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE, 8, 1, 20),
+    stateLimit: clampNumber(env.MTPROTO_DISCOVERY_STATE_LIMIT, 50, 10, 200),
     settleMs: clampNumber(env.MTPROTO_DISCOVERY_SETTLE_MS, 1400, 250, 7000),
     clickTimeoutMs: clampNumber(env.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS, 3500, 500, 20000),
     allowUnsafeButtons:
       devMode || /^(1|true|yes)$/i.test(String(env.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || "")),
+    clickWebappHandoffs: !/^(0|false|no)$/i.test(String(env.MTPROTO_DISCOVERY_CLICK_WEBAPP_HANDOFFS || "1")),
     denyButtonRe: new RegExp(String(env.MTPROTO_DISCOVERY_DENY_BUTTON_RE || DEFAULT_DENY_BUTTON_RE), "i"),
     commands: String(env.MTPROTO_DISCOVERY_COMMANDS || DEFAULT_DISCOVERY_COMMANDS)
       .split(/[,\n]+/g)
@@ -630,6 +668,10 @@ function collectWebappHandoffs(map) {
         paths: [node.path || []],
         button_text: button.text || "",
         button_type: button.type || "",
+        message_id: Number(button.messageId) || null,
+        row_index: Number.isFinite(Number(button.rowIndex)) ? Number(button.rowIndex) : null,
+        column_index: Number.isFinite(Number(button.columnIndex)) ? Number(button.columnIndex) : null,
+        button_data_base64: button.dataBase64 || "",
         url: button.url,
         recommended_engine: "cloudflare-browser-run",
         status: "pending_browser_run"
@@ -738,7 +780,64 @@ async function captureWebappScreenshot(env, run, handoff, url, index) {
   };
 }
 
-async function auditSingleWebappHandoff(env, run, handoff, index) {
+async function clickWebappHandoffButton(env, run, handoff, options, shouldStop = async () => false) {
+  if (!options.clickWebappHandoffs) {
+    return {
+      enabled: false,
+      reason: "MTPROTO_DISCOVERY_CLICK_WEBAPP_HANDOFFS is disabled."
+    };
+  }
+
+  const peer = peerForRun(run);
+  const path = Array.isArray(handoff.path) ? handoff.path : [];
+  const label = String(handoff.button_text || "").trim();
+  if (!label) {
+    return {
+      enabled: true,
+      ok: false,
+      error: "WebApp/URL button text is missing."
+    };
+  }
+
+  const replay = await replayPath(env, peer, path, options, shouldStop);
+  if (replay.cancelled) {
+    return {
+      enabled: true,
+      cancelled: true,
+      ok: false,
+      path,
+      error: "Cancelled while replaying handoff path."
+    };
+  }
+  if (replay.error) {
+    return {
+      enabled: true,
+      ok: false,
+      path,
+      error: replay.error
+    };
+  }
+
+  const clicked = await clickLatestButton(env, peer, label, options, { allowUrl: true });
+  const afterState = await getMtprotoChatState(env, peer, options.stateLimit).catch(() => null);
+  const afterMessages = afterState?.messages || [];
+  const newMessages = activeMessages(afterMessages, clicked.activeAfterMessageId)
+    .filter((message) => !message.outgoing)
+    .slice(-8)
+    .map(compactMessage);
+
+  return {
+    enabled: true,
+    ok: true,
+    path,
+    button: clicked.button,
+    click: clicked.click,
+    active_after_message_id: clicked.activeAfterMessageId,
+    new_messages: newMessages
+  };
+}
+
+async function auditSingleWebappHandoff(env, run, handoff, index, options, shouldStop = async () => false) {
   if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
     return {
       ...handoff,
@@ -769,6 +868,17 @@ async function auditSingleWebappHandoff(env, run, handoff, index) {
     enabled: true,
     ok: false
   };
+  let telegramClick = null;
+
+  try {
+    telegramClick = await clickWebappHandoffButton(env, run, handoff, options, shouldStop);
+  } catch (error) {
+    telegramClick = {
+      enabled: true,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
 
   try {
     const response = await env.BROWSER.quickAction("json", {
@@ -808,12 +918,14 @@ async function auditSingleWebappHandoff(env, run, handoff, index) {
   return {
     ...handoff,
     status: browserRun.ok ? "browser_run_complete" : "browser_run_failed",
+    telegram_click: telegramClick,
     browser_run: browserRun
   };
 }
 
 async function auditWebappHandoffs(env, run, handoffs, shouldStop, onProgress = null) {
-  const maxAudits = clampNumber(env.BROWSER_RUN_MAX_WEBAPP_HANDOFFS, 3, 0, 8);
+  const maxAudits = clampNumber(env.BROWSER_RUN_MAX_WEBAPP_HANDOFFS, 8, 0, 20);
+  const options = discoveryOptions(env, run);
   const results = [];
   if (!handoffs.length) {
     await notifyProgress(onProgress, {
@@ -855,14 +967,14 @@ async function auditWebappHandoffs(env, run, handoffs, shouldStop, onProgress = 
     try {
       await notifyProgress(onProgress, {
         phase: "webapp",
-        message: `Browser Run ${index + 1}/${Math.min(handoffs.length, maxAudits)}: ${compactText(handoff.button_text || handoff.url, 120)}`
+        message: `Кликаю Telegram WebApp/URL кнопку и запускаю Browser Run ${index + 1}/${Math.min(handoffs.length, maxAudits)}: ${compactText(handoff.button_text || handoff.url, 120)}`
       });
-      const audited = await auditSingleWebappHandoff(env, run, handoff, index);
+      const audited = await auditSingleWebappHandoff(env, run, handoff, index, options, shouldStop);
       results.push(audited);
       await notifyProgress(onProgress, {
         phase: "webapp",
         status: audited.status === "browser_run_complete" ? "success" : "warning",
-        message: `Browser Run ${index + 1}: ${audited.status}`,
+        message: `WebApp/URL ${index + 1}: ${audited.telegram_click?.ok ? "Telegram кнопка нажата, " : ""}${audited.status}`,
         handoff_status: audited.status
       });
     } catch (error) {
@@ -883,6 +995,38 @@ async function auditWebappHandoffs(env, run, handoffs, shouldStop, onProgress = 
     }
   }
   return { cancelled: false, handoffs: results };
+}
+
+function followedActionsFromHandoffs(handoffs) {
+  return (handoffs || []).flatMap((handoff) => {
+    const actions = [];
+    if (handoff.telegram_click?.enabled) {
+      actions.push({
+        type: "telegram_button_click",
+        status: handoff.telegram_click.ok ? "success" : handoff.telegram_click.cancelled ? "cancelled" : "failure",
+        node_id: handoff.node_id,
+        path: handoff.path || [],
+        button_text: handoff.button_text || "",
+        url: handoff.url || "",
+        result: handoff.telegram_click.click?.result || null,
+        new_messages: handoff.telegram_click.new_messages || [],
+        error: handoff.telegram_click.error || ""
+      });
+    }
+    if (handoff.browser_run?.enabled) {
+      actions.push({
+        type: "browser_webapp_audit",
+        status: handoff.browser_run.ok ? "success" : "failure",
+        node_id: handoff.node_id,
+        path: handoff.path || [],
+        button_text: handoff.button_text || "",
+        url: handoff.url || "",
+        screenshot: handoff.browser_run.screenshot?.artifact_name || "",
+        error: handoff.browser_run.json_error || handoff.browser_run.screenshot_error || ""
+      });
+    }
+    return actions;
+  });
 }
 
 function buildGeneratedSuite(map, run) {
@@ -934,6 +1078,7 @@ function buildGeneratedSuite(map, run) {
     selected_ids: selectedIds,
     missing_selected_ids: missingSelectedIds,
     webapp_handoffs: webappHandoffs,
+    followed_actions: [],
     draft_count: drafts.length,
     drafts,
     bot_map: map
@@ -944,6 +1089,7 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
   const branchReviews = (suite.drafts || []).map((draft) => {
     const node = map.nodes.find((item) => item.id === draft.node_id);
     const analysis = node ? classifyNode(node) : classifyNode({ path: draft.path || [], tail: [], buttons: [], skippedButtons: [] });
+    const followedActions = (suite.followed_actions || []).filter((action) => action.node_id === draft.node_id);
     return {
       draft_id: draft.id,
       node_id: draft.node_id,
@@ -951,10 +1097,13 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
       intended_behavior: analysis.purpose,
       observed_behavior: node?.error
         ? `Ошибка воспроизведения: ${node.error}`
-        : `Ветка достигнута через MTProto, сообщений: ${node?.messageWindow?.activeCount ?? 0}, кнопок: ${(node?.buttons || []).length}`,
+        : followedActions.length
+          ? `Ветка достигнута через MTProto; выполнено действий по просьбе бота: ${followedActions.length}.`
+          : `Ветка достигнута через MTProto, сообщений: ${node?.messageWindow?.activeCount ?? 0}, кнопок: ${(node?.buttons || []).length}`,
       defects: node?.error ? [node.error] : [],
       severity: analysis.severity,
-      missing_evidence: (node?.skippedButtons || []).some((button) => button.skipReason === "url_or_webapp_terminal")
+      missing_evidence: (node?.skippedButtons || []).some((button) => button.skipReason === "url_or_webapp_terminal") &&
+        !followedActions.some((action) => action.type === "browser_webapp_audit" && action.status === "success")
         ? ["Нужен Browser Run/Playwright для WebApp/URL."]
         : []
     };
@@ -1055,6 +1204,7 @@ async function aiReview(env, map, suite) {
             "Return only valid compact json. Do not include markdown, prose, code fences, or comments.",
             "Keep each string under 180 characters, arrays under 5 items, and avoid long paragraphs.",
             "Use webapp_handoffs as evidence for URL/WebApp branches. If Browser Run could not inspect a handoff, mark it as missing evidence.",
+            "Use followed_actions as evidence of what the QA runner actually clicked/opened. Distinguish Telegram button click from Browser-only WebApp inspection.",
             "Use this json shape exactly:",
             '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
           ].join(" ")
@@ -1098,6 +1248,7 @@ async function aiReview(env, map, suite) {
               summary: suite.summary,
               coverage: suite.coverage,
               webapp_handoffs: suite.webapp_handoffs,
+              followed_actions: suite.followed_actions,
               missing_selected_ids: suite.missing_selected_ids,
               drafts: (suite.drafts || []).map((draft) => ({
                 id: draft.id,
@@ -1206,14 +1357,21 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     };
   }
   generatedSuite.webapp_handoffs = auditedWebapps.handoffs;
+  generatedSuite.followed_actions = followedActionsFromHandoffs(auditedWebapps.handoffs);
   const webappScreenshots = auditedWebapps.handoffs
     .map((handoff) => handoff.browser_run?.screenshot?.artifact_name)
     .filter(Boolean);
-  generatedSuite.source_artifacts = unique([...(generatedSuite.source_artifacts || []), ...webappScreenshots]);
+  generatedSuite.source_artifacts = unique([
+    ...(generatedSuite.source_artifacts || []),
+    ...(generatedSuite.followed_actions.length ? ["followed-actions.json"] : []),
+    ...webappScreenshots
+  ]);
   generatedSuite.coverage = {
     ...generatedSuite.coverage,
     webappHandoffsAudited: auditedWebapps.handoffs.filter((handoff) => handoff.status === "browser_run_complete").length,
-    webappScreenshots: webappScreenshots.length
+    webappScreenshots: webappScreenshots.length,
+    followedActions: generatedSuite.followed_actions.length,
+    telegramClicks: generatedSuite.followed_actions.filter((action) => action.type === "telegram_button_click").length
   };
   await notifyProgress(onProgress, {
     phase: "ai",
