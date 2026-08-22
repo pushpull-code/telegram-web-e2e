@@ -834,6 +834,7 @@ function discoveryOptions(env, run) {
     maxButtonsPerNode: clampNumber(env.MTPROTO_DISCOVERY_MAX_BUTTONS_PER_NODE, 8, 1, 20),
     stateLimit: clampNumber(env.MTPROTO_DISCOVERY_STATE_LIMIT, 50, 10, 200),
     settleMs: clampNumber(env.MTPROTO_DISCOVERY_SETTLE_MS, 1400, 250, 7000),
+    deviceCheckSettleMs: clampNumber(env.MTPROTO_DEVICE_CHECK_SETTLE_MS, 7000, 1000, 30000),
     clickTimeoutMs: clampNumber(env.MTPROTO_DISCOVERY_CLICK_TIMEOUT_MS, 3500, 500, 20000),
     allowUnsafeButtons:
       devMode || /^(1|true|yes)$/i.test(String(env.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || "")),
@@ -1657,10 +1658,14 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
     message: `Открываю check-device ссылку: ${compactText(deviceTarget.text || deviceTarget.url, 100)}`
   });
   result.device_check = await auditDeviceCheckUrl(env, run, deviceTarget);
-  await sleep(options.settleMs);
+  await notifyProgress(onProgress, {
+    phase: "country",
+    message: "Жду результат device-check перед повторным /join_task"
+  });
+  await sleep(options.deviceCheckSettleMs);
 
   await sendMtprotoMessage(env, peer, JOIN_TASK_COMMAND);
-  await sleep(options.settleMs);
+  await sleep(options.deviceCheckSettleMs);
   const finalState = await getMtprotoChatState(env, peer, options.stateLimit);
   const finalBlocked = confirmationStillBlocked(finalState.messages || []);
   const finalOutcome = parseDeviceCheckOutcome(finalState.messages || []);
