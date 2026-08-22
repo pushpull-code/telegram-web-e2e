@@ -819,6 +819,7 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     status: generatedSuite.summary.failed > 0 ? "failure" : "success",
     completed_at: nowIso(),
     duration_sec: Math.round((Date.now() - startedAt) / 1000),
+    bot_map: discovery.map,
     generated_suite: generatedSuite,
     generated_suite_ai_review: generatedSuiteAiReview,
     screenshot_count: 0,

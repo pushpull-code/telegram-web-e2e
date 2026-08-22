@@ -1165,6 +1165,9 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
   if (!run || !env.BOT_STATE_KV) {
     return;
   }
+  if (isTerminalPanelRun(run)) {
+    return;
+  }
   if (!loadedRun && fallbackRun) {
     await savePanelRun(env, run);
   }
@@ -1536,6 +1539,11 @@ function panelHtml() {
       }[char]));
     }
 
+    function compactUiText(value, maxLength) {
+      const text = String(value || "").replace(/\\s+/g, " ").trim();
+      return text.length > maxLength ? text.slice(0, maxLength - 3).trim() + "..." : text;
+    }
+
     async function api(path, options = {}) {
       const headers = Object.assign({ "content-type": "application/json" }, options.headers || {});
       const response = await fetch(path, Object.assign({}, options, { headers }));
@@ -1692,7 +1700,8 @@ function panelHtml() {
       });
       return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
-          suite.report_file === name || ai.report_file === name;
+          suite.report_file === name || ai.report_file === name ||
+          (name === "bot-map.json" && (suite.bot_map || run.bot_map));
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
           '<span class="mono">' + escapeHtml(name) + '</span></div>';
       }).join("") + '</div>';
@@ -1726,12 +1735,11 @@ function panelHtml() {
 
     function renderLogicTree(run) {
       const review = run.generated_suite_ai_review || {};
+      const suite = run.generated_suite || {};
+      const map = suite.bot_map || run.bot_map || {};
       const flows = Array.isArray(review.flow_map) ? review.flow_map : [];
-      if (!flows.length) {
-        return '<h2>Дерево логики</h2><div class="muted">AI-карта flow пока недоступна. Показываю сгенерированные ветки.</div>' +
-          renderBranches(run);
-      }
-      return '<h2>Дерево логики</h2>' + flows.map((flow) => {
+      const nodes = Array.isArray(map.nodes) ? map.nodes : [];
+      const flowHtml = flows.length ? flows.map((flow) => {
         const branches = Array.isArray(flow.branches) ? flow.branches : [];
         return '<div class="item"><b>' + escapeHtml(flow.name || "flow") + '</b> ' +
           pill(flow.criticality || "medium", statusKind(flow.criticality)) +
@@ -1740,7 +1748,20 @@ function panelHtml() {
             return '<div class="step"><span class="mono">' + escapeHtml(index + 1) + '</span><span>' +
               escapeHtml(branch) + '</span><span>ветка</span></div>';
           }).join("") + '</div></div>';
-      }).join("");
+      }).join("") : '<div class="muted">AI-карта flow пока недоступна.</div>';
+      const rawHtml = nodes.length ? '<h2>Точная MTProto-карта</h2>' + nodes.map((node) => {
+        const tail = Array.isArray(node.tail) ? node.tail.filter((message) => !message.outgoing).slice(-2) : [];
+        const buttons = Array.isArray(node.buttons) ? node.buttons : [];
+        const skipped = Array.isArray(node.skippedButtons) ? node.skippedButtons : [];
+        const path = Array.isArray(node.path) && node.path.length ? node.path.join(" → ") : "/start";
+        return '<div class="item"><b class="mono">' + escapeHtml(node.id || "node") + '</b> ' +
+          pill("depth " + (node.depth || 0)) + '<div class="muted">' + escapeHtml(path) + '</div>' +
+          '<pre>' + escapeHtml(tail.map((message) => compactUiText(message.text || "", 260)).join("\\n\\n") || "Нет текста в активном окне.") + '</pre>' +
+          (buttons.length ? '<div><b>Кнопки:</b> ' + escapeHtml(buttons.map((button) => button.text).join(" | ")) + '</div>' : '') +
+          (skipped.length ? '<div class="muted">Пропущено: ' + escapeHtml(skipped.map((button) => String(button.text || "") + " (" + String(button.skipReason || "") + ")").join(" | ")) + '</div>' : '') +
+          '</div>';
+      }).join("") : '<div class="muted">Точная MTProto-карта пока не создана.</div>';
+      return '<h2>Дерево логики</h2>' + flowHtml + rawHtml;
     }
 
     function renderAi(run) {
@@ -1751,7 +1772,7 @@ function panelHtml() {
       const next = review.next_run || {};
       return '<h2>AI-разбор</h2>' +
         '<div class="item"><b>Общий взгляд</b><p>' + escapeHtml(overview.summary || "AI-разбора пока нет.") + '</p>' +
-        '<div class="muted">' + escapeHtml(overview.product_purpose || "") + '</div></div>' +
+        '<div class="muted">' + escapeHtml(overview.business_purpose || overview.product_purpose || "") + '</div></div>' +
         '<div class="item"><b>Дефекты</b>' + (defects.length ? defects.map((item) => {
           return '<div class="item">' + pill(item.severity || "unknown", statusKind(item.severity)) +
             '<b>' + escapeHtml(item.title || "") + '</b><div class="muted">' + escapeHtml((item.evidence || []).join(" | ")) +
