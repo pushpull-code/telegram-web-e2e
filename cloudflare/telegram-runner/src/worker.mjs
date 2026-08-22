@@ -1229,15 +1229,49 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
       ...run,
       status: "running",
       engine: "cloudflare",
+      cloudflare_phase: "start",
+      cloudflare_progress: {
+        phase: "start",
+        status: "running",
+        message: "Cloudflare MTProto runner начал прогон"
+      },
       updated_at: nowIso()
     },
     { phase: "cloudflare", status: "running", message: "Cloudflare MTProto runner начал прогон" }
   );
   await savePanelRun(env, run);
 
+  const recordCloudflareProgress = async (event) => {
+    const latest = (await loadPanelRun(env, panelRunId)) || run;
+    if (["cancelled", "cancel_requested"].includes(String(latest.status || "").trim().toLowerCase())) {
+      return;
+    }
+    const phase = String(event?.phase || "cloudflare").trim() || "cloudflare";
+    const status = String(event?.status || "running").trim() || "running";
+    const message = String(event?.message || "").trim();
+    const next = appendPanelEvent(
+      {
+        ...latest,
+        status: "running",
+        engine: "cloudflare",
+        cloudflare_phase: phase,
+        cloudflare_progress: {
+          ...event,
+          phase,
+          status,
+          message
+        },
+        updated_at: nowIso()
+      },
+      { phase, status, message: message || "Cloudflare runner обновил прогресс" }
+    );
+    await savePanelRun(env, next);
+  };
+
   try {
     const result = await executeCloudflareNativeRun(env, run, {
-      shouldStop: () => isPanelRunCancelled(env, panelRunId)
+      shouldStop: () => isPanelRunCancelled(env, panelRunId),
+      onProgress: recordCloudflareProgress
     });
     const latest = (await loadPanelRun(env, panelRunId)) || run;
     if (["cancelled", "cancel_requested"].includes(String(latest.status || "").trim().toLowerCase())) {
@@ -1247,6 +1281,12 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
           {
             ...latest,
             status: "cancelled",
+            cloudflare_phase: "finish",
+            cloudflare_progress: {
+              phase: "finish",
+              status: "cancelled",
+              message: "Cloudflare runner остановлен после отмены"
+            },
             completed_at: nowIso(),
             updated_at: nowIso()
           },
@@ -1261,6 +1301,17 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
         ...latest,
         ...result,
         engine: "cloudflare",
+        cloudflare_phase: "finish",
+        cloudflare_progress: {
+          phase: "finish",
+          status: result.status || "success",
+          message:
+            result.status === "success"
+              ? "Cloudflare MTProto runner завершил прогон"
+              : result.status === "cancelled"
+                ? "Cloudflare MTProto runner отменён"
+                : "Cloudflare MTProto runner завершился с ошибкой"
+        },
         updated_at: nowIso()
       },
       {
@@ -1284,6 +1335,12 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
         status: "failure",
         error: message,
         engine: "cloudflare",
+        cloudflare_phase: "finish",
+        cloudflare_progress: {
+          phase: "finish",
+          status: "failure",
+          message
+        },
         completed_at: nowIso(),
         updated_at: nowIso()
       },
@@ -1643,6 +1700,12 @@ function panelHtml() {
         discover_mtproto: "только карта",
         cloudflare: "Cloudflare",
         github: "GitHub Actions",
+        start: "старт",
+        discovery: "карта Telegram",
+        suite: "ветки",
+        webapp: "WebApp/URL",
+        ai: "AI-разбор",
+        finish: "финал",
         complete: "завершён",
         errored: "ошибка",
         terminated: "остановлен",
@@ -1749,10 +1812,13 @@ function panelHtml() {
     function renderExecutionDetails(run, github) {
       if (run.engine === "cloudflare") {
         const cf = run.cloudflare_run || {};
+        const progress = run.cloudflare_progress || {};
         const lines = [
           run.workflow_instance_id ? "workflow: " + run.workflow_instance_id : "",
           run.workflow_status ? "workflow статус: " + uiLabel(run.workflow_status) : "",
           run.workflow_output_status ? "workflow output: " + uiLabel(run.workflow_output_status) : "",
+          run.cloudflare_phase ? "этап: " + uiLabel(run.cloudflare_phase) : "",
+          progress.message ? "сейчас: " + progress.message : "",
           cf.runner ? "runner: " + cf.runner : "runner: cloudflare-mtproto",
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",

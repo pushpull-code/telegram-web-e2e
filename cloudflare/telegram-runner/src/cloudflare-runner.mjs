@@ -11,6 +11,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function notifyProgress(onProgress, event) {
+  if (typeof onProgress !== "function") {
+    return;
+  }
+  try {
+    await onProgress({
+      status: "running",
+      ...event
+    });
+  } catch (_) {
+    // Progress updates are best effort; the runner result must not depend on KV writes.
+  }
+}
+
 function clampNumber(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -363,16 +377,25 @@ function discoveryOptions(env, run) {
   };
 }
 
-async function buildBotMap(env, run, shouldStop = async () => false) {
+async function buildBotMap(env, run, shouldStop = async () => false, onProgress = null) {
   const peer = peerForRun(run);
   const options = discoveryOptions(env, run);
   const nodes = [];
   const edges = [];
   const queue = [[], ...options.commands.map((command) => [command])];
   const visited = new Set();
+  await notifyProgress(onProgress, {
+    phase: "discovery",
+    message: `Строю карту Telegram: глубина ${options.maxDepth}, лимит ${options.maxNodes} узл.`
+  });
 
   while (queue.length > 0 && nodes.length < options.maxNodes) {
     if (await shouldStop()) {
+      await notifyProgress(onProgress, {
+        phase: "discovery",
+        status: "cancelled",
+        message: "Построение карты остановлено"
+      });
       return { cancelled: true, map: null };
     }
 
@@ -385,12 +408,24 @@ async function buildBotMap(env, run, shouldStop = async () => false) {
 
     const replay = await replayPath(env, peer, currentPath, options, shouldStop);
     if (replay.cancelled) {
+      await notifyProgress(onProgress, {
+        phase: "discovery",
+        status: "cancelled",
+        message: "Построение карты остановлено"
+      });
       return { cancelled: true, map: null };
     }
 
     const state = await getMtprotoChatState(env, peer, options.stateLimit);
     const node = buildNode(currentId, currentPath, state.messages || [], replay.activeAfterMessageId, replay.error, options);
     nodes.push(node);
+    await notifyProgress(onProgress, {
+      phase: "discovery",
+      message: `Найден узел ${nodes.length}/${options.maxNodes}: ${compactText(currentPath.join(" > ") || "/start", 120)}`,
+      node_count: nodes.length,
+      edge_count: edges.length,
+      queue_count: queue.length
+    });
 
     if (currentPath.length > 0) {
       addEdge(edges, nodeId(currentPath.slice(0, -1)), currentId, currentPath.at(-1) || "", currentPath.length);
@@ -407,6 +442,14 @@ async function buildBotMap(env, run, shouldStop = async () => false) {
       }
     }
   }
+
+  await notifyProgress(onProgress, {
+    phase: "discovery",
+    status: "success",
+    message: `Карта готова: ${nodes.length} узл., ${edges.length} переходов`,
+    node_count: nodes.length,
+    edge_count: edges.length
+  });
 
   return {
     cancelled: false,
@@ -769,11 +812,28 @@ async function auditSingleWebappHandoff(env, run, handoff, index) {
   };
 }
 
-async function auditWebappHandoffs(env, run, handoffs, shouldStop) {
+async function auditWebappHandoffs(env, run, handoffs, shouldStop, onProgress = null) {
   const maxAudits = clampNumber(env.BROWSER_RUN_MAX_WEBAPP_HANDOFFS, 3, 0, 8);
   const results = [];
+  if (!handoffs.length) {
+    await notifyProgress(onProgress, {
+      phase: "webapp",
+      status: "success",
+      message: "WebApp/URL переходов не найдено"
+    });
+    return { cancelled: false, handoffs: results };
+  }
+  await notifyProgress(onProgress, {
+    phase: "webapp",
+    message: `Проверяю WebApp/URL через Browser Run: ${Math.min(handoffs.length, maxAudits)} из ${handoffs.length}`
+  });
   for (const [index, handoff] of handoffs.entries()) {
     if (await shouldStop()) {
+      await notifyProgress(onProgress, {
+        phase: "webapp",
+        status: "cancelled",
+        message: "Проверка WebApp/URL остановлена"
+      });
       return { cancelled: true, handoffs: results };
     }
     if (index >= maxAudits) {
@@ -785,10 +845,26 @@ async function auditWebappHandoffs(env, run, handoffs, shouldStop) {
           reason: `Skipped by BROWSER_RUN_MAX_WEBAPP_HANDOFFS=${maxAudits}.`
         }
       });
+      await notifyProgress(onProgress, {
+        phase: "webapp",
+        status: "warning",
+        message: `Пропустил WebApp/URL сверх лимита: ${compactText(handoff.button_text || handoff.url, 120)}`
+      });
       continue;
     }
     try {
-      results.push(await auditSingleWebappHandoff(env, run, handoff, index));
+      await notifyProgress(onProgress, {
+        phase: "webapp",
+        message: `Browser Run ${index + 1}/${Math.min(handoffs.length, maxAudits)}: ${compactText(handoff.button_text || handoff.url, 120)}`
+      });
+      const audited = await auditSingleWebappHandoff(env, run, handoff, index);
+      results.push(audited);
+      await notifyProgress(onProgress, {
+        phase: "webapp",
+        status: audited.status === "browser_run_complete" ? "success" : "warning",
+        message: `Browser Run ${index + 1}: ${audited.status}`,
+        handoff_status: audited.status
+      });
     } catch (error) {
       results.push({
         ...handoff,
@@ -798,6 +874,11 @@ async function auditWebappHandoffs(env, run, handoffs, shouldStop) {
           ok: false,
           error: error instanceof Error ? error.message : String(error)
         }
+      });
+      await notifyProgress(onProgress, {
+        phase: "webapp",
+        status: "warning",
+        message: `Browser Run ${index + 1} завершился ошибкой: ${compactText(error instanceof Error ? error.message : String(error), 180)}`
       });
     }
   }
@@ -1084,7 +1165,12 @@ export function isCloudflareNativeSuite(suite) {
 export async function executeCloudflareNativeRun(env, run, options = {}) {
   const startedAt = Date.now();
   const shouldStop = typeof options.shouldStop === "function" ? options.shouldStop : async () => false;
-  const discovery = await buildBotMap(env, run, shouldStop);
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  await notifyProgress(onProgress, {
+    phase: "start",
+    message: "Cloudflare runner готовит прогон"
+  });
+  const discovery = await buildBotMap(env, run, shouldStop, onProgress);
   if (discovery.cancelled) {
     return {
       status: "cancelled",
@@ -1097,8 +1183,17 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     };
   }
 
+  await notifyProgress(onProgress, {
+    phase: "suite",
+    message: "Собираю ветки и ожидаемое поведение"
+  });
   const generatedSuite = buildGeneratedSuite(discovery.map, run);
-  const auditedWebapps = await auditWebappHandoffs(env, run, generatedSuite.webapp_handoffs || [], shouldStop);
+  await notifyProgress(onProgress, {
+    phase: "suite",
+    status: "success",
+    message: `Ветки готовы: ${generatedSuite.draft_count} выбрано из ${discovery.map.nodes.length} узл.`
+  });
+  const auditedWebapps = await auditWebappHandoffs(env, run, generatedSuite.webapp_handoffs || [], shouldStop, onProgress);
   if (auditedWebapps.cancelled) {
     return {
       status: "cancelled",
@@ -1120,7 +1215,23 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     webappHandoffsAudited: auditedWebapps.handoffs.filter((handoff) => handoff.status === "browser_run_complete").length,
     webappScreenshots: webappScreenshots.length
   };
+  await notifyProgress(onProgress, {
+    phase: "ai",
+    message: "Отправляю карту, ветки и WebApp evidence в AI-разбор"
+  });
   const generatedSuiteAiReview = await aiReview(env, discovery.map, generatedSuite);
+  await notifyProgress(onProgress, {
+    phase: "ai",
+    status: generatedSuiteAiReview?.ai?.enabled ? "success" : "warning",
+    message: generatedSuiteAiReview?.ai?.enabled
+      ? `AI-разбор готов: ${generatedSuiteAiReview.ai.model || "model"}`
+      : "AI-разбор недоступен, использован локальный fallback"
+  });
+  await notifyProgress(onProgress, {
+    phase: "finish",
+    status: generatedSuite.summary.failed > 0 ? "failure" : "success",
+    message: `Прогон завершён: ${generatedSuite.summary.failed > 0 ? "есть ошибки" : "без ошибок"}, скриншотов ${webappScreenshots.length}`
+  });
   return {
     status: generatedSuite.summary.failed > 0 ? "failure" : "success",
     completed_at: nowIso(),
