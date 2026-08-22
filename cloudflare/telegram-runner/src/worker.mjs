@@ -1649,6 +1649,7 @@ function panelHtml() {
   <script>
     const state = {
       runId: new URLSearchParams(location.search).get("run") || "",
+      latestRun: null,
       poll: null,
       creating: false,
       cancelling: false
@@ -1760,6 +1761,68 @@ function panelHtml() {
       return ["queued", "requested", "waiting", "pending", "in_progress", "running", "cancel_requested"].includes(text);
     }
 
+    function runStatusRank(value) {
+      const text = String(value || "").toLowerCase();
+      if (["success", "failure", "failed", "cancelled", "timed_out", "completed"].includes(text)) return 3;
+      if (text === "syncing_result") return 2;
+      if (["running", "in_progress", "cancel_requested"].includes(text)) return 1;
+      return 0;
+    }
+
+    function eventKey(event) {
+      return [event.time || "", event.phase || "", event.status || "", event.message || ""].join("|");
+    }
+
+    function mergePanelEvents(currentEvents, incomingEvents) {
+      const merged = [];
+      const seen = new Set();
+      [...(currentEvents || []), ...(incomingEvents || [])].forEach((event) => {
+        const key = eventKey(event || {});
+        if (seen.has(key)) return;
+        seen.add(key);
+        merged.push(event);
+      });
+      return merged
+        .sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")))
+        .slice(-50);
+    }
+
+    function mergeRunSnapshot(incoming) {
+      const current = state.latestRun;
+      if (!incoming || !incoming.id) {
+        return incoming || {};
+      }
+      if (!current || current.id !== incoming.id) {
+        state.latestRun = incoming;
+        return incoming;
+      }
+      const currentRank = runStatusRank(current.github_live?.conclusion || current.github?.conclusion || current.status);
+      const incomingRank = runStatusRank(incoming.github_live?.conclusion || incoming.github?.conclusion || incoming.status);
+      const incomingIsOlder = String(incoming.updated_at || "") < String(current.updated_at || "") ||
+        (Array.isArray(incoming.events) && Array.isArray(current.events) && incoming.events.length < current.events.length);
+      const merged = {
+        ...current,
+        ...incoming,
+        events: mergePanelEvents(current.events, incoming.events)
+      };
+      if (currentRank > incomingRank || (incomingIsOlder && incomingRank <= currentRank)) {
+        merged.status = current.status || incoming.status;
+        merged.workflow_status = current.workflow_status || incoming.workflow_status;
+        merged.workflow_output_status = current.workflow_output_status || incoming.workflow_output_status;
+        merged.cloudflare_phase = current.cloudflare_phase || incoming.cloudflare_phase;
+        merged.cloudflare_progress = current.cloudflare_progress || incoming.cloudflare_progress;
+        merged.cloudflare_run = current.cloudflare_run || incoming.cloudflare_run;
+        merged.generated_suite = current.generated_suite || incoming.generated_suite;
+        merged.generated_suite_ai_review = current.generated_suite_ai_review || incoming.generated_suite_ai_review;
+        merged.bot_map = current.bot_map || incoming.bot_map;
+        merged.screenshot_count = current.screenshot_count ?? incoming.screenshot_count;
+        merged.completed_at = current.completed_at || incoming.completed_at;
+        merged.updated_at = current.updated_at || incoming.updated_at;
+      }
+      state.latestRun = merged;
+      return merged;
+    }
+
     function setCreateBusy(isBusy) {
       state.creating = isBusy;
       const startButton = q("#startRun");
@@ -1788,6 +1851,7 @@ function panelHtml() {
       qa("[data-open-run]").forEach((button) => {
         button.addEventListener("click", () => {
           state.runId = button.getAttribute("data-open-run") || "";
+          state.latestRun = null;
           history.replaceState(null, "", state.runId ? "?run=" + encodeURIComponent(state.runId) : location.pathname);
           loadRun();
         });
@@ -2002,7 +2066,7 @@ function panelHtml() {
     }
 
     function renderRun(payload) {
-      const run = payload.run || {};
+      const run = mergeRunSnapshot(payload.run || {});
       const github = run.github_live || run.github || {};
       const status = github.conclusion || github.status || run.status || "queued";
       const bot = run.bot_username || "";
@@ -2068,6 +2132,7 @@ function panelHtml() {
         };
         const payload = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
         state.runId = payload.run.id;
+        state.latestRun = null;
         history.replaceState(null, "", "?run=" + encodeURIComponent(state.runId));
         await loadRuns();
         renderRun(payload);
