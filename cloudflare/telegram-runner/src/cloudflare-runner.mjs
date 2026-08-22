@@ -617,6 +617,7 @@ async function mtprotoRequest(env, path, body) {
   const config = mtprotoConfig(env);
   const timeoutMs = clampNumber(env.MTPROTO_SERVICE_REQUEST_TIMEOUT_MS, 20000, 3000, 120000);
   const maxAttempts = clampNumber(env.MTPROTO_SERVICE_RETRY_ATTEMPTS, 3, 1, 6);
+  const maxFloodWaitSeconds = clampNumber(env.MTPROTO_SERVICE_MAX_FLOOD_WAIT_SECONDS, 20, 0, 300);
   let lastError = "";
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -638,7 +639,23 @@ async function mtprotoRequest(env, path, body) {
         return payload;
       }
       const errorText = `MTProto ${path} failed: ${response.status} ${JSON.stringify(payload)}`;
-      const retryable = response.status >= 500 || /send_failed|timeout|temporar|flood|rate/i.test(JSON.stringify(payload));
+      const payloadText = JSON.stringify(payload);
+      const floodWaitSeconds = Number(payload?.retryAfterSeconds || payload?.floodWaitSeconds || payload?.seconds || 0);
+      const floodWait = response.status === 429 || /telegram_flood_wait|FloodWaitError|flood/i.test(payloadText);
+      if (floodWait) {
+        if (
+          attempt < maxAttempts &&
+          Number.isFinite(floodWaitSeconds) &&
+          floodWaitSeconds > 0 &&
+          floodWaitSeconds <= maxFloodWaitSeconds
+        ) {
+          lastError = errorText;
+          await sleep((floodWaitSeconds + 1) * 1000);
+          continue;
+        }
+        throw new Error(errorText);
+      }
+      const retryable = response.status >= 500 || /send_failed|timeout|temporar|rate/i.test(payloadText);
       if (!retryable || attempt >= maxAttempts) {
         throw new Error(errorText);
       }
