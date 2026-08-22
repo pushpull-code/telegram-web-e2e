@@ -245,6 +245,11 @@ function compactPanelText(value, maxLength = 2000) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
 }
 
+function normalizeBrowserProfile(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["mobile", "tablet", "desktop"].includes(normalized) ? normalized : "mobile";
+}
+
 function sanitizePanelRunForStorage(run) {
   if (!run || typeof run !== "object") {
     return run;
@@ -371,6 +376,7 @@ function samePanelRunRequest(run, criteria) {
     return (
       normalizeWebsiteUrl(run?.target_url) === normalizeWebsiteUrl(criteria?.targetUrl) &&
       String(run?.test_objective || "").trim() === String(criteria?.testObjective || "").trim() &&
+      normalizeBrowserProfile(run?.browser_profile) === normalizeBrowserProfile(criteria?.browserProfile) &&
       String(run?.suite || "").trim() === String(criteria?.suite || "").trim() &&
       normalizePanelEngine(run?.engine, run?.suite) === normalizePanelEngine(criteria?.engine, criteria?.suite)
     );
@@ -1697,6 +1703,12 @@ function panelHtml() {
       <div id="websiteFields" hidden>
         <label for="targetUrl">URL сайта / приложения</label>
         <input id="targetUrl" autocomplete="off" placeholder="https://rate2cash.com">
+        <label for="browserProfile">Устройство</label>
+        <select id="browserProfile">
+          <option value="mobile">Мобильный браузер</option>
+          <option value="tablet">Планшет</option>
+          <option value="desktop">Desktop</option>
+        </select>
         <label for="testObjective">Что проверить</label>
         <textarea id="testObjective" placeholder="Например: пройти авторизацию, проверить главный экран, меню, задачи, пополнение, ошибки в формах."></textarea>
         <label for="authInstructions">Авторизация / тестовый аккаунт</label>
@@ -1821,6 +1833,9 @@ function panelHtml() {
         website_audit: "сайт: обзор + авторизация + AI",
         website: "сайт",
         telegram_bot: "Telegram-бот",
+        mobile: "мобильный",
+        tablet: "планшет",
+        desktop: "desktop",
         cloudflare: "Cloudflare",
         github: "GitHub Actions",
         start: "старт",
@@ -2085,6 +2100,7 @@ function panelHtml() {
           Number.isFinite(Number(cf.webapp_screenshot_count)) ? "WebApp скриншотов: " + cf.webapp_screenshot_count : "",
           Number.isFinite(Number(cf.website_screenshot_count)) ? "скриншотов сайта: " + cf.website_screenshot_count : "",
           cf.target_url ? "url: " + cf.target_url : "",
+          cf.browser_profile ? "устройство: " + uiLabel(cf.browser_profile) : "",
           typeof cf.auth_configured === "boolean" ? "auth настроен: " + (cf.auth_configured ? "да" : "нет") : "",
           typeof cf.auth_confirmed === "boolean" ? "auth подтвержден: " + (cf.auth_confirmed ? "да" : "нет") : "",
           Number.isFinite(Number((run.generated_suite || {}).coverage?.followedActions)) ? "выполнено действий: " + (run.generated_suite || {}).coverage.followedActions : "",
@@ -2281,6 +2297,7 @@ function panelHtml() {
       const factLines = [
         facts.targetType ? "тип: " + uiLabel(facts.targetType) : "",
         facts.targetUrl ? "url: " + facts.targetUrl : "",
+        facts.browserProfile ? "устройство: " + uiLabel(facts.browserProfile) : "",
         facts.selector ? "режим: " + uiLabel(facts.selector) : "",
         Number.isFinite(Number(facts.reachedDepth)) || Number.isFinite(Number(facts.maxDepth))
           ? "глубина: " + (facts.reachedDepth ?? "?") + "/" + (facts.maxDepth ?? "?")
@@ -2358,7 +2375,8 @@ function panelHtml() {
       q("#runMeta").innerHTML = [
         pill(run.target_type || (run.target_url ? "website" : "telegram_bot")),
         pill(run.suite || "generated_scenarios"),
-        pill(run.selector || "smart"),
+        run.browser_profile ? pill(run.browser_profile) : "",
+        run.target_type === "website" ? "" : pill(run.selector || "smart"),
         pill(run.engine || "cloudflare"),
         pill(status, statusKind(status)),
         github.html_url ? '<a href="' + escapeHtml(github.html_url) + '" target="_blank" rel="noreferrer">Прогон в GitHub</a>' : ''
@@ -2379,6 +2397,7 @@ function panelHtml() {
       toggleTargetFields();
       if (run.bot_username) q("#botUsername").value = run.bot_username;
       if (run.target_url) q("#targetUrl").value = run.target_url;
+      if (run.browser_profile) q("#browserProfile").value = ["mobile", "tablet", "desktop"].includes(run.browser_profile) ? run.browser_profile : "mobile";
       if (run.test_objective) q("#testObjective").value = run.test_objective;
       q("#authInstructions").value = "";
       if (run.start_payload) q("#startPayload").value = run.start_payload;
@@ -2416,6 +2435,7 @@ function panelHtml() {
           target_type: q("#targetType").value,
           bot_username: q("#botUsername").value.trim(),
           target_url: q("#targetUrl").value.trim(),
+          browser_profile: q("#browserProfile").value,
           start_payload: q("#startPayload").value.trim(),
           test_objective: q("#testObjective").value.trim(),
           auth_instructions: q("#authInstructions").value.trim(),
@@ -2555,11 +2575,13 @@ async function handlePanelRunCreate(env, request, ctx) {
   const selector = suite === "generated_scenarios" ? String(body.selector || defaultSelector).trim() || defaultSelector : "";
   const maxDrafts = clampNumber(body.max_drafts, engine === "cloudflare" ? 20 : 8, 1, 50);
   const testObjective = compactPanelText(body.test_objective || "", 1600);
+  const browserProfile = targetType === "website" ? normalizeBrowserProfile(body.browser_profile) : "";
   const authInstructions = compactPanelText(body.auth_instructions || "", 2000);
   const activeRun = await findActivePanelRun(env, {
     targetType,
     botUsername,
     targetUrl,
+    browserProfile,
     startPayload: body.start_payload,
     testObjective,
     suite,
@@ -2580,6 +2602,7 @@ async function handlePanelRunCreate(env, request, ctx) {
       target_type: targetType,
       ...(botUsername ? { bot_username: `@${botUsername}` } : {}),
       ...(targetUrl ? { target_url: targetUrl } : {}),
+      ...(browserProfile ? { browser_profile: browserProfile } : {}),
       start_payload: String(body.start_payload || "").trim(),
       test_objective: testObjective,
       auth_configured: Boolean(authInstructions),

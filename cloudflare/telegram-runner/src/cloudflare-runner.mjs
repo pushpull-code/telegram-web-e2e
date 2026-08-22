@@ -1238,7 +1238,7 @@ async function captureUrlScreenshot(env, run, artifactName, url, metadata = {}) 
     screenshotOptions: {
       fullPage: true
     },
-    viewport: {
+    viewport: metadata.viewport || {
       width: 1280,
       height: 900
     },
@@ -1259,6 +1259,7 @@ async function captureUrlScreenshot(env, run, artifactName, url, metadata = {}) 
       contentType,
       kind: metadata.kind || "browser-screenshot",
       ...(metadata.buttonText ? { buttonText: metadata.buttonText } : {}),
+      ...(metadata.browserProfile ? { browserProfile: metadata.browserProfile } : {}),
       url: compactText(url, 240)
     }
   });
@@ -2378,6 +2379,34 @@ function normalizeWebsiteUrl(value) {
   }
 }
 
+function normalizeBrowserProfile(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["mobile", "tablet", "desktop"].includes(normalized) ? normalized : "mobile";
+}
+
+function browserProfileSettings(value) {
+  const profile = normalizeBrowserProfile(value);
+  if (profile === "desktop") {
+    return {
+      name: "desktop",
+      viewport: { width: 1365, height: 900 },
+      promptLabel: "desktop browser"
+    };
+  }
+  if (profile === "tablet") {
+    return {
+      name: "tablet",
+      viewport: { width: 820, height: 1180 },
+      promptLabel: "tablet browser"
+    };
+  }
+  return {
+    name: "mobile",
+    viewport: { width: 390, height: 844 },
+    promptLabel: "mobile browser"
+  };
+}
+
 function websiteAuditSchema() {
   return {
     type: "json_schema",
@@ -2529,6 +2558,7 @@ function buildWebsiteSuite(run, audit, map) {
     coverage_facts: {
       targetType: "website",
       targetUrl: normalizeWebsiteUrl(run.target_url),
+      browserProfile: normalizeBrowserProfile(run.browser_profile),
       websiteAudited: Boolean(audit.ok),
       websitePages: map.nodes.length,
       websiteScreenshots: screenshotName ? 1 : 0,
@@ -2601,11 +2631,13 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
 
   const authInstructions = String(run.auth_instructions || "").trim();
   const objective = String(run.test_objective || "").trim() || "Провести общий QA-обзор сайта, навигации, форм, авторизации и очевидных ошибок.";
+  const browserProfile = browserProfileSettings(run.browser_profile);
   const audit = {
     enabled: Boolean(env.BROWSER),
     ok: false,
     target_url: targetUrl,
     final_url: targetUrl,
+    browser_profile: browserProfile.name,
     auth_configured: Boolean(authInstructions),
     auth_instructions_used: Boolean(authInstructions)
   };
@@ -2628,6 +2660,7 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
         url: targetUrl,
         prompt: [
           "Ты QA-инженер. Открой сайт или веб-приложение и сделай безопасный обзор пользовательских сценариев.",
+          `Используй профиль устройства: ${browserProfile.promptLabel}.`,
           `Цель проверки: ${objective}`,
           authInstructions
             ? `Инструкции авторизации для тестового аккаунта: ${authInstructions}`
@@ -2638,6 +2671,7 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
           "Верни краткий JSON: назначение, авторизация, основные flow, посещенные страницы, формы, блокеры, визуальные/логические проблемы и следующий шаг."
         ].join(" "),
         response_format: websiteAuditSchema(),
+        viewport: browserProfile.viewport,
         gotoOptions: {
           waitUntil: "networkidle2",
           timeout: 45000
@@ -2681,7 +2715,9 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
   try {
     audit.screenshot = await captureUrlScreenshot(env, run, "website-homepage.png", targetUrl, {
       kind: "website-screenshot",
-      buttonText: compactText(targetUrl, 80)
+      buttonText: compactText(targetUrl, 80),
+      browserProfile: browserProfile.name,
+      viewport: browserProfile.viewport
     });
   } catch (error) {
     audit.screenshot_error = error instanceof Error ? error.message : String(error);
@@ -2716,6 +2752,7 @@ async function executeWebsiteAuditRun(env, run, options = {}) {
     cloudflare_run: {
       runner: "cloudflare-website",
       target_url: targetUrl,
+      browser_profile: browserProfile.name,
       node_count: map.nodes.length,
       edge_count: map.edges.length,
       website_screenshot_count: audit.screenshot?.ok ? 1 : 0,
