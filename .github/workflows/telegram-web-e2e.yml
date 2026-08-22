@@ -11,6 +11,18 @@ on:
         description: 'Scenario JSON file for scenario suite'
         required: false
         default: 'scenarios/rate2cash-basic.json'
+      bot_username:
+        description: 'Override Telegram bot username for this run'
+        required: false
+        default: ''
+      bot_start_payload:
+        description: 'Override Telegram bot /start payload for this run'
+        required: false
+        default: ''
+      panel_run_id:
+        description: 'Web panel run id for callback correlation'
+        required: false
+        default: ''
       generated_scenario_draft:
         description: 'Draft id from generated-scenarios.json for generated_scenario suite'
         required: false
@@ -61,12 +73,14 @@ jobs:
     timeout-minutes: 45
     env:
       CI: "true"
-      BOT_USERNAME: ${{ vars.BOT_USERNAME }}
+      BOT_USERNAME: ${{ inputs.bot_username || vars.BOT_USERNAME }}
+      BOT_START_PAYLOAD: ${{ inputs.bot_start_payload }}
       TELEGRAM_WEB_URL: ${{ vars.TELEGRAM_WEB_URL }}
       TELEGRAM_STORAGE_STATE_B64: ${{ secrets.TELEGRAM_STORAGE_STATE_B64 }}
       RUN_CHAT_ID: ${{ inputs.chat_id }}
       RUN_LANG: ${{ inputs.lang }}
       RUN_SCENARIO_KEY: ${{ inputs.scenario_key }}
+      PANEL_RUN_ID: ${{ inputs.panel_run_id }}
       SCENARIO_FILE: ${{ inputs.scenario_file }}
       GENERATED_SCENARIO_DRAFT: ${{ inputs.generated_scenario_draft }}
       GENERATED_SCENARIO_DRAFTS: ${{ inputs.generated_scenario_drafts }}
@@ -77,6 +91,7 @@ jobs:
       MTPROTO_SERVICE_URL: ${{ vars.MTPROTO_SERVICE_URL }}
       MTPROTO_SERVICE_TOKEN: ${{ secrets.MTPROTO_SERVICE_TOKEN }}
       MTPROTO_SERVICE_REQUEST_TIMEOUT_MS: ${{ vars.MTPROTO_SERVICE_REQUEST_TIMEOUT_MS || '20000' }}
+      MTPROTO_DISCOVERY_START_PAYLOAD: ${{ inputs.bot_start_payload }}
       MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '1' || vars.MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS || '0' }}
       MTPROTO_DISCOVERY_MAX_DEPTH: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '3' || vars.MTPROTO_DISCOVERY_MAX_DEPTH || '1' }}
       MTPROTO_DISCOVERY_MAX_NODES: ${{ (inputs.generated_scenario_drafts == 'dev' || inputs.generated_scenario_drafts == 'unsafe') && '30' || vars.MTPROTO_DISCOVERY_MAX_NODES || '8' }}
@@ -320,7 +335,7 @@ jobs:
         run: node scripts/collect_report_screenshots.mjs "${SCREENSHOTS_FILE}"
 
       - name: Send Cloudflare report callback
-        if: ${{ always() && env.RUN_CHAT_ID != '' }}
+        if: ${{ always() && (env.RUN_CHAT_ID != '' || env.PANEL_RUN_ID != '') }}
         env:
           CALLBACK_URL: ${{ env.RUN_REPORT_CALLBACK_URL }}
           CALLBACK_URL_FALLBACK: ${{ vars.CLOUDFLARE_REPORT_URL }}
@@ -328,6 +343,7 @@ jobs:
           CHAT_ID: ${{ env.RUN_CHAT_ID }}
           RUN_LANG: ${{ env.RUN_LANG }}
           RUN_SCENARIO_KEY: ${{ env.RUN_SCENARIO_KEY }}
+          PANEL_RUN_ID: ${{ env.PANEL_RUN_ID }}
           RUN_STATUS: ${{ job.status }}
           RUN_DURATION_SEC: ${{ steps.duration.outputs.seconds }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

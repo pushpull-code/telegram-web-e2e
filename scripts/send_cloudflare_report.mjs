@@ -3,6 +3,7 @@ import fs from "node:fs";
 const callbackUrl = (process.env.CALLBACK_URL || process.env.CALLBACK_URL_FALLBACK || "").trim();
 const callbackToken = (process.env.CALLBACK_TOKEN || "").trim();
 const chatId = (process.env.CHAT_ID || "").trim();
+const panelRunId = (process.env.PANEL_RUN_ID || "").trim();
 const lang = (process.env.RUN_LANG || "ru").trim();
 const scenarioKey = (process.env.RUN_SCENARIO_KEY || "start_finish").trim();
 const status = (process.env.RUN_STATUS || "failure").trim();
@@ -19,10 +20,10 @@ const generatedSuiteAiReviewFile = (
 const maxChunkBase64Chars = Number(process.env.REPORT_CALLBACK_CHUNK_BASE64_MAX || "1500000");
 const maxChunkFiles = Number(process.env.REPORT_CALLBACK_CHUNK_FILE_MAX || "4");
 const maxGeneratedSuiteDrafts = Number(process.env.REPORT_CALLBACK_GENERATED_SUITE_MAX_DRAFTS || "8");
-const maxAiReviewBranches = Number(process.env.REPORT_CALLBACK_AI_REVIEW_BRANCH_MAX || "6");
+const maxAiReviewBranches = Number(process.env.REPORT_CALLBACK_AI_REVIEW_BRANCH_MAX || "20");
 
-if (!chatId) {
-  console.log("CHAT_ID is empty. Skip callback.");
+if (!chatId && !panelRunId) {
+  console.log("CHAT_ID and PANEL_RUN_ID are empty. Skip callback.");
   process.exit(0);
 }
 
@@ -170,6 +171,16 @@ function readGeneratedSuiteAiReview() {
           ? overview.mainFlows.slice(0, 8).map((line) => compactText(line, 220))
           : []
       },
+      flow_map: Array.isArray(review.flowMap)
+        ? review.flowMap.slice(0, 20).map((flow) => ({
+            name: compactText(flow?.name, 120),
+            purpose: compactText(flow?.purpose, 260),
+            branches: Array.isArray(flow?.branches)
+              ? flow.branches.slice(0, 20).map((line) => compactText(line, 120))
+              : [],
+            criticality: compactText(flow?.criticality, 40)
+          }))
+        : [],
       defects: Array.isArray(review.defects)
         ? review.defects.slice(0, 6).map((defect) => ({
             title: compactText(defect?.title, 180),
@@ -223,6 +234,7 @@ const generatedSuiteAiReview = readGeneratedSuiteAiReview();
 function reportEnvelope(extra = {}) {
   return {
     chat_id: chatId,
+    panel_run_id: panelRunId || undefined,
     lang,
     scenario_key: scenarioKey,
     status,
