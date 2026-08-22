@@ -1893,16 +1893,20 @@ function panelHtml() {
       const webappHtml = webapps.length ? webapps.map((handoff) => {
         const browser = handoff.browser_run || {};
         const result = browser.result || {};
+        const fallbackText = browser.screenshot?.url
+          ? "Текстовый Browser Run разбор не получен, скриншот сохранён."
+          : "Browser Run ещё не дал данных по этому переходу.";
         const notes = [
           result.visible_text_summary,
           Array.isArray(result.qa_notes) && result.qa_notes.length ? result.qa_notes.join(" | ") : "",
           Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "Блокеры: " + result.errors_or_blockers.join(" | ") : "",
-          browser.error ? "Ошибка: " + browser.error : ""
+          browser.json_error ? "JSON: " + browser.json_error : "",
+          browser.screenshot_error ? "Скриншот: " + browser.screenshot_error : ""
         ].filter(Boolean).join("\\n");
         return '<div class="item">' + pill(handoff.status || "pending_browser_run", statusKind(handoff.status)) +
           '<b>' + escapeHtml(handoff.button_text || "WebApp/URL") + '</b>' +
           '<div class="muted mono">' + escapeHtml(handoff.url || "") + '</div>' +
-          '<pre>' + escapeHtml(notes || "Browser Run ещё не дал данных по этому переходу.") + '</pre>' +
+          '<pre>' + escapeHtml(notes || fallbackText) + '</pre>' +
           renderScreenshotEvidence(browser) + '</div>';
       }).join("") : '<div class="muted">WebApp/URL переходов пока нет.</div>';
       return '<h2>AI-разбор</h2>' +

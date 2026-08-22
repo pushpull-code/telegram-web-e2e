@@ -737,8 +737,8 @@ async function auditSingleWebappHandoff(env, run, handoff, index) {
       ].join(" "),
       response_format: webappAuditSchema(),
       gotoOptions: {
-        waitUntil: "networkidle2",
-        timeout: 20000
+        waitUntil: "load",
+        timeout: 30000
       }
     });
     const payload = await response
