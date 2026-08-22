@@ -681,7 +681,7 @@ async function aiReview(env, map, suite) {
 
   const body = {
     model,
-    temperature: 0.2,
+    temperature: 0,
     response_format: { type: "json_object" },
     max_tokens: clampNumber(env.AI_MAX_TOKENS, 4000, 800, 8000),
     messages: [
@@ -690,57 +690,59 @@ async function aiReview(env, map, suite) {
         content:
           [
             "You are a senior QA analyst for Telegram bots.",
-            "Return only valid compact JSON. Do not include markdown, prose, code fences, or comments.",
-            "Use this JSON shape exactly:",
+            "Return only valid compact json. Do not include markdown, prose, code fences, or comments.",
+            "Use this json shape exactly:",
             '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
           ].join(" ")
       },
       {
         role: "user",
-        content: JSON.stringify({
-          outputSchema: {
-            overview: {
-              summary: "short Russian summary",
-              business_purpose: "inferred purpose",
-              main_flows: ["flow"],
-              risks: ["risk"],
-              next_steps: ["step"]
-            },
-            flow_map: [{ name: "flow", purpose: "purpose", criticality: "low|medium|high|critical", branches: ["branch"] }],
-            branch_reviews: [
-              {
-                draft_id: "id",
-                node_id: "node",
-                path: ["action"],
-                intended_behavior: "what should happen",
-                observed_behavior: "what was observed",
-                defects: ["defect"],
-                severity: "low|medium|high|critical",
-                missing_evidence: ["gap"]
+        content: `Return valid json for this Telegram bot audit payload:\n${JSON.stringify(
+          {
+            outputSchema: {
+              overview: {
+                summary: "short Russian summary",
+                business_purpose: "inferred purpose",
+                main_flows: ["flow"],
+                risks: ["risk"],
+                next_steps: ["step"]
+              },
+              flow_map: [{ name: "flow", purpose: "purpose", criticality: "low|medium|high|critical", branches: ["branch"] }],
+              branch_reviews: [
+                {
+                  draft_id: "id",
+                  node_id: "node",
+                  path: ["action"],
+                  intended_behavior: "what should happen",
+                  observed_behavior: "what was observed",
+                  defects: ["defect"],
+                  severity: "low|medium|high|critical",
+                  missing_evidence: ["gap"]
+                }
+              ],
+              defects: [{ title: "defect", evidence: ["evidence"], severity: "low|medium|high|critical" }],
+              coverage_gaps: ["gap"],
+              next_run: {
+                recommended_depth: 2,
+                recommended_max_nodes: 12,
+                focus_branches: ["draft id"],
+                engine: "cloudflare-browser-run|github-full|manual"
               }
-            ],
-            defects: [{ title: "defect", evidence: ["evidence"], severity: "low|medium|high|critical" }],
-            coverage_gaps: ["gap"],
-            next_run: {
-              recommended_depth: 2,
-              recommended_max_nodes: 12,
-              focus_branches: ["draft id"],
-              engine: "cloudflare-browser-run|github-full|manual"
+            },
+            botMap: map,
+            generatedSuite: {
+              summary: suite.summary,
+              coverage: suite.coverage,
+              drafts: (suite.drafts || []).map((draft) => ({
+                id: draft.id,
+                status: draft.status,
+                scenario: draft.scenario,
+                path: draft.path,
+                first_error: draft.first_error
+              }))
             }
-          },
-          botMap: map,
-          generatedSuite: {
-            summary: suite.summary,
-            coverage: suite.coverage,
-            drafts: (suite.drafts || []).map((draft) => ({
-              id: draft.id,
-              status: draft.status,
-              scenario: draft.scenario,
-              path: draft.path,
-              first_error: draft.first_error
-            }))
           }
-        })
+        )}`
       }
     ]
   };
@@ -764,10 +766,13 @@ async function aiReview(env, map, suite) {
     if (!response.ok) {
       throw new Error(`AI failed: ${response.status} ${JSON.stringify(payload).slice(0, 800)}`);
     }
-    const content = payload?.choices?.[0]?.message?.content || "";
+    const rawContent = payload?.choices?.[0]?.message?.content || "";
+    const content = Array.isArray(rawContent)
+      ? rawContent.map((part) => part?.text || part?.content || "").join("")
+      : String(rawContent || "");
     const parsed = extractJsonObject(content);
     if (!parsed || typeof parsed !== "object") {
-      throw new Error("AI returned non-JSON review.");
+      throw new Error(`AI returned non-JSON review: ${compactText(content || "[empty]", 300)}`);
     }
     return {
       ...fallbackAiReview(map, suite, { model }),
