@@ -76,8 +76,9 @@ function readReportEntry(reportPath, outputDir) {
   const scenario = normalizeScenarioDirName(path.basename(path.dirname(reportPath)));
   const steps = Array.isArray(report.steps) ? report.steps : [];
   const hasFailedStep = steps.some((step) => step?.status === "failed");
+  const hasWarningStep = steps.some((step) => step?.status === "warning" || (step?.status === "info" && step?.error));
   const hasPassedStep = steps.some((step) => step?.status === "passed");
-  const status = hasFailedStep ? "failed" : hasPassedStep ? "passed" : "unknown";
+  const status = hasFailedStep ? "failed" : hasWarningStep ? "warning" : hasPassedStep ? "passed" : "unknown";
 
   return {
     scenario,
@@ -108,6 +109,9 @@ function readReportEntry(reportPath, outputDir) {
 
 function rankReport(entry) {
   if (entry.status === "passed") {
+    return 4;
+  }
+  if (entry.status === "warning") {
     return 3;
   }
   if (entry.status === "failed") {
@@ -149,8 +153,12 @@ function statusForDraft(chosenReport, attempts) {
     return "not_run";
   }
   const hadFailedAttempt = attempts.some((entry) => entry.status === "failed");
+  const hadWarningAttempt = attempts.some((entry) => entry.status === "warning");
   if (chosenReport.status === "passed" && hadFailedAttempt) {
     return "flaky";
+  }
+  if (chosenReport.status === "passed" && hadWarningAttempt) {
+    return "warning";
   }
   return chosenReport.status;
 }
@@ -161,6 +169,9 @@ function markdownStatus(status) {
   }
   if (status === "flaky") {
     return "flaky";
+  }
+  if (status === "warning") {
+    return "warning";
   }
   if (status === "failed") {
     return "failed";
@@ -185,7 +196,7 @@ function buildDraftResults(suite, reportsByScenario) {
       attempts: attempts.length,
       reportPath: chosenReport?.reportRelativePath || "",
       steps: chosenReport?.steps || [],
-      firstError: chosenReport?.steps.find((step) => step.status === "failed")?.error || ""
+      firstError: chosenReport?.steps.find((step) => step.status === "failed" || step.status === "warning")?.error || ""
     };
   });
 }
@@ -227,6 +238,7 @@ function buildMarkdown(payload) {
     `- Drafts selected: ${payload.summary.total}`,
     `- Passed: ${payload.summary.passed}`,
     `- Flaky: ${payload.summary.flaky}`,
+    `- Warning: ${payload.summary.warning}`,
     `- Failed: ${payload.summary.failed}`,
     `- Not run: ${payload.summary.notRun}`,
     ""
@@ -335,6 +347,7 @@ const payload = {
     total: draftResults.length,
     passed: countByStatus(draftResults, "passed"),
     flaky: countByStatus(draftResults, "flaky"),
+    warning: countByStatus(draftResults, "warning"),
     failed: countByStatus(draftResults, "failed"),
     notRun: countByStatus(draftResults, "not_run")
   },

@@ -215,6 +215,7 @@ function generatedSuiteLabel(lang, key) {
       total: "\u0432\u0441\u0435\u0433\u043e",
       passed: "\u043f\u0440\u043e\u0448\u043b\u043e",
       failed: "\u0443\u043f\u0430\u043b\u043e",
+      warning: "\u043f\u0440\u0435\u0434\u0443\u043f\u0440.",
       flaky: "\u043d\u0435\u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e",
       notRun: "\u043d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u043b\u043e\u0441\u044c",
       steps: "\u0448\u0430\u0433\u043e\u0432",
@@ -233,6 +234,7 @@ function generatedSuiteLabel(lang, key) {
       total: "total",
       passed: "passed",
       failed: "failed",
+      warning: "warning",
       flaky: "flaky",
       notRun: "not run",
       steps: "steps",
@@ -261,6 +263,9 @@ function generatedSuiteStatusText(lang, status) {
   }
   if (normalized === "flaky") {
     return generatedSuiteLabel(lang, "flaky");
+  }
+  if (normalized === "warning") {
+    return generatedSuiteLabel(lang, "warning");
   }
   return generatedSuiteLabel(lang, "notRun");
 }
@@ -294,6 +299,7 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
       `${generatedSuiteLabel(lang, "total")}: ${total}`,
       `${generatedSuiteLabel(lang, "passed")}: ${numberOrZero(summary.passed)}`,
       `${generatedSuiteLabel(lang, "flaky")}: ${numberOrZero(summary.flaky)}`,
+      ...(numberOrZero(summary.warning) > 0 ? [`${generatedSuiteLabel(lang, "warning")}: ${numberOrZero(summary.warning)}`] : []),
       `${generatedSuiteLabel(lang, "failed")}: ${numberOrZero(summary.failed)}`,
       `${generatedSuiteLabel(lang, "notRun")}: ${numberOrZero(summary.notRun)}`
     ].join(", ")
@@ -318,9 +324,10 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
     const status = generatedSuiteStatusText(lang, draft?.status);
     const stepCount = numberOrZero(draft?.step_count) || (Array.isArray(draft?.steps) ? draft.steps.length : 0);
     const passedSteps = numberOrZero(draft?.passed_steps);
+    const warningSteps = numberOrZero(draft?.warning_steps);
     const attempts = numberOrZero(draft?.attempts);
     const stepText = stepCount > 0
-      ? `, ${generatedSuiteLabel(lang, "steps")}: ${passedSteps}/${stepCount}`
+      ? `, ${generatedSuiteLabel(lang, "steps")}: ${passedSteps}/${stepCount}${warningSteps > 0 ? `, ${generatedSuiteLabel(lang, "warning")}: ${warningSteps}` : ""}`
       : "";
     const attemptsText = attempts > 1 ? `, ${generatedSuiteLabel(lang, "attempts")}: ${attempts}` : "";
     lines.push(`- ${id}: ${status}${stepText}${attemptsText}`);

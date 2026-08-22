@@ -97,6 +97,7 @@ function readGeneratedSuiteReport() {
         attempts: Number.isFinite(Number(draft?.attempts)) ? Number(draft.attempts) : 0,
         step_count: steps.length,
         passed_steps: countStepsByStatus(steps, "passed"),
+        warning_steps: countStepsByStatus(steps, "warning"),
         failed_steps: countStepsByStatus(steps, "failed"),
         first_error: compactText(draft?.firstError, 320),
         steps: steps.slice(0, 8).map((step) => ({
@@ -156,6 +157,8 @@ function readGeneratedSuiteAiReview() {
         enabled: Boolean(parsed.ai?.enabled),
         provider: compactText(parsed.ai?.provider, 80),
         model: compactText(parsed.ai?.model, 120),
+        response_model: compactText(parsed.ai?.responseModel, 120),
+        finish_reason: compactText(parsed.ai?.finishReason, 80),
         error: compactText(parsed.ai?.error || parsed.ai?.parseError, 240)
       },
       overview: {

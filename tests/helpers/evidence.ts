@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
 import { collectTailMessages } from "./telegram-web";
 
-export type EvidenceStatus = "passed" | "failed" | "info";
+export type EvidenceStatus = "passed" | "failed" | "warning" | "info";
 
 export type EvidenceStep = {
   index: number;

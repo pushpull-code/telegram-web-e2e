@@ -30,6 +30,8 @@ export type BotMapNode = {
     count: number;
     firstId: number | null;
     lastId: number | null;
+    activeAfterMessageId?: number | null;
+    activeCount?: number;
   };
   tail: BotMapMessage[];
   buttons: BotMapButton[];
@@ -334,6 +336,9 @@ export type AiReview = {
   report?: AiQaReport;
   parsed?: unknown;
   rawText?: string;
+  finishReason?: string | null;
+  responseModel?: string;
+  usage?: unknown;
   parseError?: string;
   error?: string;
 };
@@ -423,6 +428,10 @@ function normalizeText(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function isCommandAction(value: string): boolean {
+  return value.trim().startsWith("/");
 }
 
 function unique(values: string[]): string[] {
@@ -609,6 +618,14 @@ function tryParseJson(text: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function isDeepSeekAi(baseUrl: string, model: string): boolean {
+  return /deepseek/i.test(baseUrl) || /^deepseek-/i.test(model);
+}
+
+function positiveNumber(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -893,6 +910,10 @@ export async function requestAiReview(
     .trim()
     .replace(/\/+$/, "");
   const timeoutMs = Number(process.env.MTPROTO_DISCOVERY_AI_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || "60000");
+  const maxTokens = positiveNumber(
+    Number(process.env.MTPROTO_DISCOVERY_AI_MAX_TOKENS || process.env.AI_MAX_TOKENS || "8000"),
+    8000
+  );
 
   if (!apiKey) {
     return {
@@ -904,78 +925,122 @@ export async function requestAiReview(
   }
 
   const prompt = buildAiQaPrompt(map, heuristic, webTargetAudits);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000);
+  const timeoutLabel = positiveNumber(timeoutMs, 60_000);
+  let lastResult: AiReview | null = null;
 
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutLabel);
+    const userPrompt = attempt === 1
+      ? prompt
+      : `${prompt}\n\nRetry note: previous AI response was empty or invalid. Return one valid JSON object only.`;
+    const body: Record<string, unknown> = {
         model,
         temperature: 0.2,
+        max_tokens: maxTokens,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You analyze Telegram bot QA maps in staged mode. Be concrete, conservative, and return valid JSON only."
+              "You analyze Telegram bot QA maps in staged mode. Return exactly one valid JSON object. Separate evidence from inference."
           },
-          { role: "user", content: prompt }
+          { role: "user", content: userPrompt }
         ]
-      })
-    });
+      };
+    if (isDeepSeekAi(baseUrl, model)) {
+      body.thinking = { type: "disabled" };
+    }
 
-    const payload = (await response.json().catch(() => ({}))) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string };
-    };
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
 
-    if (!response.ok) {
-      return {
+      const payload = (await response.json().catch(() => ({}))) as {
+        model?: string;
+        usage?: unknown;
+        choices?: Array<{
+          finish_reason?: string | null;
+          message?: {
+            content?: string | null;
+            reasoning_content?: string | null;
+          };
+        }>;
+        error?: { message?: string };
+      };
+      const choice = payload.choices?.[0];
+      const finishReason = choice?.finish_reason ?? null;
+
+      if (!response.ok) {
+        return {
+          enabled: true,
+          provider,
+          model,
+          responseModel: payload.model,
+          usage: payload.usage,
+          finishReason,
+          error: `AI request failed: ${response.status} ${payload.error?.message || "unknown_error"}`
+        };
+      }
+
+      const rawText = String(choice?.message?.content || "").trim();
+      const parsed = extractJsonObject(rawText) || undefined;
+      const report = isAiQaReport(parsed) ? parsed : undefined;
+
+      lastResult = {
         enabled: true,
         provider,
         model,
-        error: `AI request failed: ${response.status} ${payload.error?.message || "unknown_error"}`
+        schemaVersion: 2,
+        promptVersion: AI_PROMPT_VERSION,
+        rawText,
+        responseModel: payload.model,
+        usage: payload.usage,
+        finishReason,
+        parsed,
+        ...(report ? { report } : {}),
+        ...(!report
+          ? {
+              parseError: parsed
+                ? "AI response JSON does not match staged QA schema."
+                : `AI response did not contain parseable JSON.${finishReason ? ` finish_reason=${finishReason}.` : ""}`
+            }
+          : {})
       };
+
+      if (report) {
+        return lastResult;
+      }
+    } catch (error) {
+      lastResult = {
+        enabled: true,
+        provider,
+        model,
+        error: error instanceof Error && error.name === "AbortError"
+          ? `AI request timed out after ${timeoutLabel}ms`
+          : error instanceof Error ? error.message : String(error)
+      };
+      if (attempt === 2) {
+        return lastResult;
+      }
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const rawText = String(payload.choices?.[0]?.message?.content || "").trim();
-    const parsed = extractJsonObject(rawText) || undefined;
-    const report = isAiQaReport(parsed) ? parsed : undefined;
-
-    return {
-      enabled: true,
-      provider,
-      model,
-      schemaVersion: 2,
-      promptVersion: AI_PROMPT_VERSION,
-      rawText,
-      parsed,
-      ...(report ? { report } : {}),
-      ...(!report
-        ? {
-            parseError: parsed
-              ? "AI response JSON does not match staged QA schema."
-              : "AI response did not contain parseable JSON."
-          }
-        : {})
-    };
-  } catch (error) {
-    return {
-      enabled: true,
-      provider,
-      model,
-      error: error instanceof Error && error.name === "AbortError"
-        ? `AI request timed out after ${Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000}ms`
-        : error instanceof Error ? error.message : String(error)
-    };
-  } finally {
-    clearTimeout(timeout);
   }
+
+  return lastResult || {
+    enabled: true,
+    provider,
+    model,
+    error: "AI request did not return a usable result."
+  };
 }
 
 function markdownList(values: string[] | undefined, fallback = "нет данных"): string[] {
@@ -1506,6 +1571,21 @@ function commandDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenarioDra
 }
 
 function buttonLabelSafety(label: string): Pick<GeneratedExecutableScenarioDraft, "safety" | "runnableNow" | "blocker"> {
+  if (isCommandAction(label)) {
+    if (/^\/join_task\b/i.test(label)) {
+      return {
+        safety: "test-account",
+        runnableNow: true,
+        blocker: "Run only with a dedicated test Telegram account."
+      };
+    }
+    return {
+      safety: "safe",
+      runnableNow: true,
+      blocker: null
+    };
+  }
+
   if (FLAG_EMOJI_RE.test(label) || MANUAL_BUTTON_RE.test(label)) {
     if (ALLOW_UNSAFE_BUTTON_SCENARIOS) {
       return {
@@ -1568,9 +1648,10 @@ function buttonPathScenario(enriched: EnrichedBotMap, node: BotMapNode): Generat
 
   for (const [index, label] of node.path.entries()) {
     const isLast = index === node.path.length - 1;
+    const isCommand = isCommandAction(label);
     const baseStep: GeneratedExecutableScenarioStep = {
-      name: `click ${label}`,
-      clickButton: label,
+      name: isCommand ? `send ${label}` : `click ${label}`,
+      ...(isCommand ? { send: label } : { clickButton: label }),
       timeoutMs: 45_000,
       waitMs: isLast ? 0 : 1400,
       requireFreshResponse: false,

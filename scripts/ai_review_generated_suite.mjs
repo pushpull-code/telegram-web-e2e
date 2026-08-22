@@ -320,6 +320,14 @@ function tryParseJson(text) {
   }
 }
 
+function isDeepSeekAi(baseUrl, model) {
+  return /deepseek/i.test(baseUrl) || /^deepseek-/i.test(model);
+}
+
+function positiveNumber(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
 async function requestAiReview(inputPayload) {
   const apiKey = (process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "").trim();
   const provider = (process.env.AI_PROVIDER || "openai-compatible").trim();
@@ -328,6 +336,7 @@ async function requestAiReview(inputPayload) {
     .trim()
     .replace(/\/+$/, "");
   const timeoutMs = Number(process.env.AI_REVIEW_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || "60000");
+  const maxTokens = positiveNumber(Number(process.env.AI_REVIEW_MAX_TOKENS || process.env.AI_MAX_TOKENS || "8000"), 8000);
 
   if (!apiKey) {
     return {
@@ -340,78 +349,117 @@ async function requestAiReview(inputPayload) {
   }
 
   const prompt = buildPrompt(inputPayload);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000);
+  const timeoutLabel = positiveNumber(timeoutMs, 60_000);
+  let lastResult = null;
 
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutLabel);
+    const userPrompt = attempt === 1
+      ? prompt
+      : `${prompt}\n\nRetry note: previous AI response was empty or invalid. Return one valid JSON object only.`;
+    const body = {
         model,
         temperature: 0.15,
+        max_tokens: maxTokens,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You are a strict Telegram bot QA critic. Return valid JSON only. Separate evidence from inference."
+              "You are a strict Telegram bot QA critic. Return exactly one valid JSON object. Separate evidence from inference."
           },
-          { role: "user", content: prompt }
+          { role: "user", content: userPrompt }
         ]
-      })
-    });
+      };
+    if (isDeepSeekAi(baseUrl, model)) {
+      body.thinking = { type: "disabled" };
+    }
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      const choice = payload?.choices?.[0];
+      const finishReason = choice?.finish_reason || null;
+      if (!response.ok) {
+        return {
+          enabled: true,
+          provider,
+          model,
+          responseModel: payload?.model,
+          usage: payload?.usage,
+          finishReason,
+          promptVersion: PROMPT_VERSION,
+          error: `AI request failed: ${response.status} ${payload?.error?.message || "unknown_error"}`
+        };
+      }
+
+      const rawText = String(choice?.message?.content || "").trim();
+      const parsed = extractJsonObject(rawText);
+
+      lastResult = {
+        enabled: true,
+        provider,
+        model,
+        responseModel: payload?.model,
+        usage: payload?.usage,
+        finishReason,
+        promptVersion: PROMPT_VERSION,
+        rawText,
+        ...(parsed
+          ? { review: normalizeReview(parsed), parsed }
+          : { parseError: `AI response did not contain parseable JSON.${finishReason ? ` finish_reason=${finishReason}.` : ""}` })
+      };
+
+      if (parsed) {
+        return lastResult;
+      }
+    } catch (error) {
+      lastResult = {
         enabled: true,
         provider,
         model,
         promptVersion: PROMPT_VERSION,
-        error: `AI request failed: ${response.status} ${payload?.error?.message || "unknown_error"}`
+        error: error instanceof Error && error.name === "AbortError"
+          ? `AI request timed out after ${timeoutLabel}ms`
+          : error instanceof Error ? error.message : String(error)
       };
+      if (attempt === 2) {
+        return lastResult;
+      }
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const rawText = String(payload?.choices?.[0]?.message?.content || "").trim();
-    const parsed = extractJsonObject(rawText);
-
-    return {
-      enabled: true,
-      provider,
-      model,
-      promptVersion: PROMPT_VERSION,
-      rawText,
-      ...(parsed
-        ? { review: normalizeReview(parsed), parsed }
-        : { parseError: "AI response did not contain parseable JSON." })
-    };
-  } catch (error) {
-    return {
-      enabled: true,
-      provider,
-      model,
-      promptVersion: PROMPT_VERSION,
-      error: error instanceof Error && error.name === "AbortError"
-        ? `AI request timed out after ${Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000}ms`
-        : error instanceof Error ? error.message : String(error)
-    };
-  } finally {
-    clearTimeout(timeout);
   }
+
+  return lastResult || {
+    enabled: true,
+    provider,
+    model,
+    promptVersion: PROMPT_VERSION,
+    error: "AI request did not return a usable result."
+  };
 }
 
 function fallbackReview(inputPayload) {
   const summary = inputPayload.suiteReport.summary || {};
   const failedDrafts = inputPayload.suiteReport.drafts.filter((draft) => draft.status === "failed");
-  const warningDrafts = inputPayload.suiteReport.drafts.filter((draft) => draft.status === "flaky" || draft.status === "not_run");
+  const warningDrafts = inputPayload.suiteReport.drafts.filter(
+    (draft) => draft.status === "warning" || draft.status === "flaky" || draft.status === "not_run"
+  );
 
   return normalizeReview({
     overview: {
-      summary: `Автопрогон проверил ${summary.total || inputPayload.suiteReport.drafts.length} веток: passed ${summary.passed || 0}, flaky ${summary.flaky || 0}, failed ${summary.failed || 0}, not_run ${summary.notRun || 0}.`,
+      summary: `Автопрогон проверил ${summary.total || inputPayload.suiteReport.drafts.length} веток: passed ${summary.passed || 0}, flaky ${summary.flaky || 0}, warning ${summary.warning || 0}, failed ${summary.failed || 0}, not_run ${summary.notRun || 0}.`,
       productPurpose: "Определяется по Telegram transcript и discovered branch map.",
       mainFlows: inputPayload.discovery.aiDiscoveryReview?.botOverview?.mainFlows || [],
       testedEvidence: ["generated-scenario-suite-report.json", "bot-map.json", "bot-map.enriched.json"],
@@ -443,7 +491,7 @@ function fallbackReview(inputPayload) {
       runnerChanges: ["Добавить AI-planned expected states перед исполнением сценариев."]
     },
     telegramSummary: [
-      `Проверено веток: ${summary.total || inputPayload.suiteReport.drafts.length}; passed ${summary.passed || 0}, failed ${summary.failed || 0}.`,
+      `Проверено веток: ${summary.total || inputPayload.suiteReport.drafts.length}; passed ${summary.passed || 0}, warning ${summary.warning || 0}, failed ${summary.failed || 0}.`,
       ...failedDrafts.slice(0, 3).map((draft) => `${draft.id}: ${draft.firstError || "failed"}`)
     ]
   });

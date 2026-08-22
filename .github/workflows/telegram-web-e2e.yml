@@ -91,6 +91,7 @@ jobs:
       AI_BASE_URL: ${{ vars.AI_BASE_URL }}
       AI_MODEL: ${{ vars.AI_MODEL }}
       AI_REQUEST_TIMEOUT_MS: ${{ vars.AI_REQUEST_TIMEOUT_MS || '60000' }}
+      AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS || '8000' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
       SCREENSHOTS_FILE: .cloudflare-report-screenshots.json
@@ -271,6 +272,17 @@ jobs:
         with:
           name: playwright-report
           path: playwright-report/
+          retention-days: 14
+
+      - name: Upload generated scenario source
+        if: ${{ always() && inputs.suite == 'generated_scenarios' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-scenario-source
+          path: |
+            generated-scenario-source/
+            .generated-scenario-suite.json
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Upload test artifacts

@@ -355,7 +355,8 @@ export async function runScenario(
       await runStep(page, step, bot, tailLimit);
       await evidence.append(page, stepIndex, step.name, "passed", action);
     } catch (error) {
-      await evidence.append(page, stepIndex, step.name, "failed", action, error);
+      const status = step.optional ? "warning" : "failed";
+      await evidence.append(page, stepIndex, step.name, status, action, error);
       if (!step.optional) {
         failures.push(`${step.name}: ${error instanceof Error ? error.message : String(error)}`);
       }

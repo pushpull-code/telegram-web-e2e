@@ -44,6 +44,10 @@ const webTargetTimeoutMs = Number(process.env.MTPROTO_DISCOVERY_WEB_TARGET_TIMEO
 const webSafeClicksEnabled = process.env.MTPROTO_DISCOVERY_WEB_SAFE_CLICKS === "1";
 const maxWebSafeClicks = Number(process.env.MTPROTO_DISCOVERY_MAX_WEB_SAFE_CLICKS || "2");
 const startPayload = (process.env.MTPROTO_DISCOVERY_START_PAYLOAD || botStartPayload).trim();
+const discoveryCommands = (process.env.MTPROTO_DISCOVERY_COMMANDS || "/join_task,/my_tasks,/settings,/view_earnings")
+  .split(/[,\n]+/g)
+  .map((command) => command.trim())
+  .filter(Boolean);
 const denyButtonRe = new RegExp(
   process.env.MTPROTO_DISCOVERY_DENY_BUTTON_RE ||
     "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|confirm|подтверд|оплат|pay|buy|purchase",
@@ -72,6 +76,34 @@ function compactMessage(message: MtprotoMessage): BotMapMessage {
   };
 }
 
+function isCommandAction(value: string): boolean {
+  return value.trim().startsWith("/");
+}
+
+function maxMessageId(messages: MtprotoMessage[]): number | null {
+  const ids = messages.map((message) => message.id).filter((id) => Number.isFinite(id));
+  return ids.length > 0 ? Math.max(...ids) : null;
+}
+
+function messagesAfterLastOutgoing(messages: MtprotoMessage[]): MtprotoMessage[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].outgoing) {
+      return messages.slice(index + 1);
+    }
+  }
+  return messages;
+}
+
+function activeMessages(messages: MtprotoMessage[], activeAfterMessageId?: number | null): MtprotoMessage[] {
+  if (activeAfterMessageId !== undefined && activeAfterMessageId !== null) {
+    const filtered = messages.filter((message) => message.id > activeAfterMessageId);
+    if (filtered.length > 0) {
+      return filtered;
+    }
+  }
+  return messagesAfterLastOutgoing(messages);
+}
+
 function buttonSkipReason(button: MtprotoButton): string | null {
   if (!button.text.trim()) {
     return "empty_text";
@@ -92,12 +124,16 @@ function uniqueButtonKey(button: MtprotoButton): string {
   return [button.text.trim().toLowerCase(), button.url || "", button.type].join("|");
 }
 
-function collectCurrentButtons(messages: MtprotoMessage[]): { buttons: BotMapButton[]; skippedButtons: BotMapButton[] } {
+function collectCurrentButtons(
+  messages: MtprotoMessage[],
+  activeAfterMessageId?: number | null
+): { buttons: BotMapButton[]; skippedButtons: BotMapButton[] } {
   const result: BotMapButton[] = [];
   const seen = new Set<string>();
+  const currentMessages = activeMessages(messages, activeAfterMessageId);
 
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = messages[messageIndex];
+  for (let messageIndex = currentMessages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = currentMessages[messageIndex];
     if (message.outgoing) {
       continue;
     }
@@ -136,14 +172,18 @@ function collectCurrentButtons(messages: MtprotoMessage[]): { buttons: BotMapBut
   return { buttons, skippedButtons };
 }
 
-async function startBot(peer: MtprotoPeer): Promise<void> {
+async function startBot(peer: MtprotoPeer): Promise<number | null> {
+  const before = await getMtprotoChatState(peer, stateLimit).catch(() => null);
+  const activeAfterMessageId = before ? maxMessageId(before.messages) : null;
   await sendMtprotoMessage(peer, `/start ${startPayload}`);
   await sleep(settleMs);
+  return activeAfterMessageId;
 }
 
-async function clickPathButton(peer: MtprotoPeer, label: string): Promise<void> {
+async function clickPathButton(peer: MtprotoPeer, label: string): Promise<number | null> {
   const state = await getMtprotoChatState(peer, stateLimit);
-  const found = findLatestMtprotoButton(state.messages, [label]);
+  const currentMessages = messagesAfterLastOutgoing(state.messages);
+  const found = findLatestMtprotoButton(currentMessages.length > 0 ? currentMessages : state.messages, [label]);
   if (!found) {
     throw new Error(`Button not found in latest chat state: ${label}`);
   }
@@ -162,22 +202,47 @@ async function clickPathButton(peer: MtprotoPeer, label: string): Promise<void> 
 
   await clickMtprotoButton(peer, found.message.id, selector);
   await sleep(settleMs);
+  return found.message.id - 1;
 }
 
-async function replayPath(peer: MtprotoPeer, buttonPath: string[]): Promise<string | undefined> {
-  await startBot(peer);
+async function performPathAction(peer: MtprotoPeer, label: string): Promise<number | null> {
+  if (isCommandAction(label)) {
+    const before = await getMtprotoChatState(peer, stateLimit).catch(() => null);
+    const activeAfterMessageId = before ? maxMessageId(before.messages) : null;
+    await sendMtprotoMessage(peer, label);
+    await sleep(settleMs);
+    return activeAfterMessageId;
+  }
+  return clickPathButton(peer, label);
+}
+
+async function replayPath(
+  peer: MtprotoPeer,
+  buttonPath: string[]
+): Promise<{ error?: string; activeAfterMessageId?: number | null }> {
+  let activeAfterMessageId = await startBot(peer);
   for (const label of buttonPath) {
     try {
-      await clickPathButton(peer, label);
+      activeAfterMessageId = await performPathAction(peer, label);
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        activeAfterMessageId
+      };
     }
   }
-  return undefined;
+  return { activeAfterMessageId };
 }
 
-function buildNode(id: string, currentPath: string[], messages: MtprotoMessage[], error?: string): BotMapNode {
-  const { buttons, skippedButtons } = collectCurrentButtons(messages);
+function buildNode(
+  id: string,
+  currentPath: string[],
+  messages: MtprotoMessage[],
+  activeAfterMessageId?: number | null,
+  error?: string
+): BotMapNode {
+  const currentMessages = activeMessages(messages, activeAfterMessageId);
+  const { buttons, skippedButtons } = collectCurrentButtons(messages, activeAfterMessageId);
   const first = messages[0] || null;
   const last = messages[messages.length - 1] || null;
 
@@ -190,9 +255,11 @@ function buildNode(id: string, currentPath: string[], messages: MtprotoMessage[]
       limit: stateLimit,
       count: messages.length,
       firstId: first?.id ?? null,
-      lastId: last?.id ?? null
+      lastId: last?.id ?? null,
+      activeAfterMessageId: activeAfterMessageId ?? null,
+      activeCount: currentMessages.length
     },
-    tail: messages.slice(-12).map(compactMessage),
+    tail: currentMessages.slice(-12).map(compactMessage),
     buttons: error ? [] : buttons,
     skippedButtons: error ? [] : skippedButtons,
     ...(error ? { error } : {})
@@ -650,7 +717,7 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
 
     const nodes: BotMapNode[] = [];
     const edges: BotMapEdge[] = [];
-    const queue: string[][] = [[]];
+    const queue: string[][] = [[], ...discoveryCommands.map((command) => [command])];
     const visited = new Set<string>();
 
     while (queue.length > 0 && nodes.length < maxNodes) {
@@ -664,15 +731,18 @@ test.describe.serial("MTProto bot discovery with branch analysis", () => {
         `[mtproto-discovery] node ${nodes.length + 1}/${maxNodes}: id=${currentId}, depth=${currentPath.length}, path=${currentPath.join(" > ") || "/start"}`
       );
 
-      const replayError = await replayPath(peer, currentPath);
+      const replay = await replayPath(peer, currentPath);
       const state = await getMtprotoChatState(peer, stateLimit);
-      const node = buildNode(currentId, currentPath, state.messages, replayError);
+      const node = buildNode(currentId, currentPath, state.messages, replay.activeAfterMessageId, replay.error);
       nodes.push(node);
+      if (currentPath.length > 0) {
+        addEdge(edges, nodeId(currentPath.slice(0, -1)), currentId, currentPath.at(-1) || "", currentPath.length);
+      }
       console.log(
-        `[mtproto-discovery] collected ${currentId}: buttons=${node.buttons.length}, skipped=${node.skippedButtons.length}${replayError ? `, error=${replayError}` : ""}`
+        `[mtproto-discovery] collected ${currentId}: buttons=${node.buttons.length}, skipped=${node.skippedButtons.length}${replay.error ? `, error=${replay.error}` : ""}`
       );
 
-      if (!replayError && currentPath.length < maxDepth) {
+      if (!replay.error && currentPath.length < maxDepth) {
         for (const button of node.buttons) {
           const nextPath = [...currentPath, button.text];
           const nextId = nodeId(nextPath);
