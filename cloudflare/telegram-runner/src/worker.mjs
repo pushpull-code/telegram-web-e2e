@@ -333,6 +333,16 @@ async function refreshPanelRunTerminalState(env, run) {
         return next;
       }
       if (details?.status === "terminated") {
+        if (isTerminalPanelRun(run)) {
+          const next = {
+            ...run,
+            workflow_status: details.status,
+            updated_at: nowIso(),
+            completed_at: run.completed_at || nowIso()
+          };
+          await savePanelRun(env, next);
+          return next;
+        }
         const next = appendPanelEvent(
           {
             ...run,
