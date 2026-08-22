@@ -19,6 +19,7 @@ const REQUIRED_SUITES = new Set([
 ]);
 const GENERATED_SELECTOR_SUITES = new Set(["generated_scenario", "generated_scenarios"]);
 const PANEL_RUN_PREFIX = "panel-run:";
+const PANEL_ARTIFACT_PREFIX = "panel-artifact:";
 const PANEL_RUN_TTL_SECONDS = 60 * 60 * 24 * 14;
 const PANEL_RUN_LIST_LIMIT = 30;
 const PANEL_ACTIVE_RUN_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -226,6 +227,17 @@ function runIdFromUrl(value) {
 
 function panelRunKey(id) {
   return `${PANEL_RUN_PREFIX}${id}`;
+}
+
+function normalizePanelArtifactName(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^\/+/, "");
+  return /^[A-Za-z0-9._-]{1,140}$/.test(normalized) ? normalized : "";
+}
+
+function panelArtifactKey(id, artifactName) {
+  return `${PANEL_ARTIFACT_PREFIX}${String(id || "").trim()}:${normalizePanelArtifactName(artifactName)}`;
 }
 
 function requirePanelAuthorization() {
@@ -527,6 +539,7 @@ function generatedSuiteLabel(lang, key) {
       limitedOut: "\u043d\u0435 \u0432\u043e\u0448\u043b\u043e \u0438\u0437-\u0437\u0430 \u043b\u0438\u043c\u0438\u0442\u0430",
       webappHandoffs: "WebApp/URL",
       webappHandoffsAudited: "WebApp проверено",
+      webappScreenshots: "скриншотов",
       more: "\u0435\u0449\u0435",
       branches: "\u0432\u0435\u0442\u043e\u043a"
     },
@@ -548,6 +561,7 @@ function generatedSuiteLabel(lang, key) {
       limitedOut: "limited out",
       webappHandoffs: "WebApp/URL",
       webappHandoffsAudited: "WebApp audited",
+      webappScreenshots: "screenshots",
       more: "more",
       branches: "branches"
     }
@@ -620,6 +634,9 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
     }
     if (numberOrZero(coverage.webappHandoffsAudited) > 0) {
       coverageParts.push(`${generatedSuiteLabel(lang, "webappHandoffsAudited")}: ${numberOrZero(coverage.webappHandoffsAudited)}`);
+    }
+    if (numberOrZero(coverage.webappScreenshots) > 0) {
+      coverageParts.push(`${generatedSuiteLabel(lang, "webappScreenshots")}: ${numberOrZero(coverage.webappScreenshots)}`);
     }
     if (numberOrZero(coverage.limitedOut) > 0) {
       coverageParts.push(`${generatedSuiteLabel(lang, "limitedOut")}: ${numberOrZero(coverage.limitedOut)}`);
@@ -1470,6 +1487,21 @@ function panelHtml() {
       border-radius: 6px;
       padding: 10px;
     }
+    .evidence-shot {
+      display: block;
+      max-width: min(760px, 100%);
+      max-height: 520px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      margin-top: 8px;
+    }
+    .artifact-link {
+      display: inline-block;
+      margin-top: 6px;
+      font-weight: 700;
+    }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     @media (max-width: 820px) {
@@ -1717,6 +1749,7 @@ function panelHtml() {
           cf.runner ? "runner: " + cf.runner : "runner: cloudflare-mtproto",
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
+          Number.isFinite(Number(cf.webapp_screenshot_count)) ? "WebApp скриншотов: " + cf.webapp_screenshot_count : "",
           cf.ai_model ? "AI: " + cf.ai_model : "",
           run.error ? "ошибка: " + run.error : "",
           run.duration_sec ? "время: " + run.duration_sec + " сек." : ""
@@ -1744,6 +1777,22 @@ function panelHtml() {
         return '<div class="item">' + pill(present ? "created" : "expected", present ? "ok" : "") +
           '<span class="mono">' + escapeHtml(name) + '</span></div>';
       }).join("") + '</div>';
+    }
+
+    function renderScreenshotEvidence(browser) {
+      const shot = browser && browser.screenshot ? browser.screenshot : null;
+      if (!shot) return "";
+      if (shot.url) {
+        const title = [
+          shot.byte_length ? (shot.byte_length + " bytes") : "",
+          shot.browser_ms_used ? ("browser " + shot.browser_ms_used + "ms") : ""
+        ].filter(Boolean).join(" · ");
+        return '<a class="artifact-link" href="' + escapeHtml(shot.url) + '" target="_blank" rel="noreferrer">Открыть скриншот</a>' +
+          '<a href="' + escapeHtml(shot.url) + '" target="_blank" rel="noreferrer">' +
+          '<img class="evidence-shot" src="' + escapeHtml(shot.url) + '" alt="' + escapeHtml(title || "WebApp screenshot") + '">' +
+          '</a>';
+      }
+      return shot.reason ? '<div class="muted">' + escapeHtml(shot.reason) + '</div>' : "";
     }
 
     function renderBranches(run) {
@@ -1824,7 +1873,9 @@ function panelHtml() {
             Array.isArray(result.main_actions) && result.main_actions.length ? "actions: " + result.main_actions.join(" | ") : "",
             Array.isArray(result.errors_or_blockers) && result.errors_or_blockers.length ? "blockers: " + result.errors_or_blockers.join(" | ") : ""
           ].filter(Boolean).join("\\n")) + '</pre>' : '') +
-          (browser.error ? '<div class="error">' + escapeHtml(browser.error) + '</div>' : '') +
+          renderScreenshotEvidence(browser) +
+          (browser.json_error ? '<div class="error">' + escapeHtml(browser.json_error) + '</div>' : '') +
+          (browser.screenshot_error ? '<div class="error">' + escapeHtml(browser.screenshot_error) + '</div>' : '') +
           '</div>';
       }).join("") : '<h2>WebApp/URL handoff-и</h2><div class="muted">WebApp/URL переходов пока не найдено.</div>';
       return '<h2>Дерево логики</h2>' + flowHtml + rawHtml + webappHtml;
@@ -1851,7 +1902,8 @@ function panelHtml() {
         return '<div class="item">' + pill(handoff.status || "pending_browser_run", statusKind(handoff.status)) +
           '<b>' + escapeHtml(handoff.button_text || "WebApp/URL") + '</b>' +
           '<div class="muted mono">' + escapeHtml(handoff.url || "") + '</div>' +
-          '<pre>' + escapeHtml(notes || "Browser Run ещё не дал данных по этому переходу.") + '</pre></div>';
+          '<pre>' + escapeHtml(notes || "Browser Run ещё не дал данных по этому переходу.") + '</pre>' +
+          renderScreenshotEvidence(browser) + '</div>';
       }).join("") : '<div class="muted">WebApp/URL переходов пока нет.</div>';
       return '<h2>AI-разбор</h2>' +
         '<div class="item"><b>Статус AI</b><pre>' + escapeHtml([
@@ -2287,6 +2339,32 @@ async function handlePanelRunGet(env, request, id) {
   return jsonResponse({ run: responseRun });
 }
 
+async function handlePanelRunArtifactGet(env, request, id, rawArtifactName) {
+  const authResponse = requirePanelAuthorization(env, request);
+  if (authResponse) {
+    return authResponse;
+  }
+  const artifactName = normalizePanelArtifactName(decodeURIComponent(String(rawArtifactName || "")));
+  if (!artifactName || !env.BOT_STATE_KV) {
+    return jsonResponse({ error: "Артефакт не найден" }, 404);
+  }
+  const run = await loadPanelRun(env, id);
+  if (!run) {
+    return jsonResponse({ error: "Прогон не найден" }, 404);
+  }
+  const bytes = await env.BOT_STATE_KV.get(panelArtifactKey(id, artifactName), { type: "arrayBuffer" });
+  if (!bytes) {
+    return jsonResponse({ error: "Артефакт не найден" }, 404);
+  }
+  const contentType = artifactName.toLowerCase().endsWith(".png") ? "image/png" : "application/octet-stream";
+  return new Response(bytes, {
+    headers: {
+      "content-type": contentType,
+      "cache-control": "no-store"
+    }
+  });
+}
+
 async function updatePanelRunFromReport(env, payload) {
   const panelRunId = String(payload.panel_run_id || "").trim();
   if (!panelRunId || !env.BOT_STATE_KV) {
@@ -2511,6 +2589,10 @@ export default {
     const panelRunCancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
     if (panelRunCancelMatch && request.method === "POST") {
       return handlePanelRunCancel(env, request, panelRunCancelMatch[1]);
+    }
+    const panelRunArtifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
+    if (panelRunArtifactMatch && request.method === "GET") {
+      return handlePanelRunArtifactGet(env, request, panelRunArtifactMatch[1], panelRunArtifactMatch[2]);
     }
     const panelRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (panelRunMatch && request.method === "GET") {

@@ -1,6 +1,7 @@
 const DEFAULT_DISCOVERY_COMMANDS = "/join_task,/my_tasks,/settings,/view_earnings";
 const DEFAULT_DENY_BUTTON_RE =
   "удал|delete|withdraw|вывод|cancel|отмен|заверш|finish|confirm|подтверд|оплат|pay|buy|purchase";
+const ARTIFACT_TTL_SECONDS = 60 * 60 * 24 * 14;
 
 function nowIso() {
   return new Date().toISOString();
@@ -595,6 +596,32 @@ function collectWebappHandoffs(map) {
   return Array.from(byKey.values());
 }
 
+function safeArtifactName(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 90);
+  return normalized || "artifact";
+}
+
+function webappScreenshotName(handoff, index) {
+  return `webapp-${String(index + 1).padStart(2, "0")}-${safeArtifactName(handoff.button_text || handoff.node_id)}.png`;
+}
+
+function panelArtifactKey(runId, artifactName) {
+  return `panel-artifact:${safeArtifactName(runId)}:${safeArtifactName(artifactName)}`;
+}
+
+function panelArtifactUrl(runId, artifactName) {
+  return `/api/runs/${encodeURIComponent(String(runId || ""))}/artifacts/${encodeURIComponent(artifactName)}`;
+}
+
+function shouldCaptureWebappScreenshots(env) {
+  return !/^(0|false|no)$/i.test(String(env.BROWSER_RUN_CAPTURE_SCREENSHOTS || "1"));
+}
+
 function webappAuditSchema() {
   return {
     type: "json_schema",
@@ -613,7 +640,62 @@ function webappAuditSchema() {
   };
 }
 
-async function auditSingleWebappHandoff(env, handoff) {
+async function captureWebappScreenshot(env, run, handoff, url, index) {
+  if (!shouldCaptureWebappScreenshots(env)) {
+    return {
+      enabled: false,
+      reason: "BROWSER_RUN_CAPTURE_SCREENSHOTS is disabled."
+    };
+  }
+  if (!env.BOT_STATE_KV || !run?.id) {
+    return {
+      enabled: false,
+      reason: "BOT_STATE_KV or run id is not available."
+    };
+  }
+
+  const response = await env.BROWSER.quickAction("screenshot", {
+    url,
+    screenshotOptions: {
+      fullPage: true
+    },
+    viewport: {
+      width: 1280,
+      height: 900
+    },
+    gotoOptions: {
+      waitUntil: "networkidle2",
+      timeout: 20000
+    }
+  });
+  const bytes = await response.arrayBuffer();
+  if (!response.ok || bytes.byteLength === 0) {
+    throw new Error(`Browser Run screenshot failed: ${response.status}, bytes=${bytes.byteLength}`);
+  }
+
+  const artifactName = webappScreenshotName(handoff, index);
+  const contentType = response.headers.get("content-type") || "image/png";
+  await env.BOT_STATE_KV.put(panelArtifactKey(run.id, artifactName), bytes, {
+    expirationTtl: ARTIFACT_TTL_SECONDS,
+    metadata: {
+      contentType,
+      kind: "webapp-screenshot",
+      buttonText: compactText(handoff.button_text, 80),
+      url: compactText(url, 240)
+    }
+  });
+  return {
+    enabled: true,
+    ok: true,
+    artifact_name: artifactName,
+    url: panelArtifactUrl(run.id, artifactName),
+    content_type: contentType,
+    byte_length: bytes.byteLength,
+    browser_ms_used: response.headers.get("X-Browser-Ms-Used") || ""
+  };
+}
+
+async function auditSingleWebappHandoff(env, run, handoff, index) {
   if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
     return {
       ...handoff,
@@ -640,37 +722,54 @@ async function auditSingleWebappHandoff(env, handoff) {
     };
   }
 
-  const response = await env.BROWSER.quickAction("json", {
-    url,
-    prompt: [
-      "Проанализируй эту Telegram WebApp/URL страницу как QA.",
-      "Коротко верни назначение экрана, видимые основные действия, формы, ошибки/блокеры и что проверять дальше.",
-      "Если страница требует Telegram-контекст или авторизацию и поэтому не раскрылась, явно укажи это как blocker."
-    ].join(" "),
-    response_format: webappAuditSchema(),
-    gotoOptions: {
-      waitUntil: "networkidle2",
-      timeout: 20000
+  const browserRun = {
+    enabled: true,
+    ok: false
+  };
+
+  try {
+    const response = await env.BROWSER.quickAction("json", {
+      url,
+      prompt: [
+        "Проанализируй эту Telegram WebApp/URL страницу как QA.",
+        "Коротко верни назначение экрана, видимые основные действия, формы, ошибки/блокеры и что проверять дальше.",
+        "Если страница требует Telegram-контекст или авторизацию и поэтому не раскрылась, явно укажи это как blocker."
+      ].join(" "),
+      response_format: webappAuditSchema(),
+      gotoOptions: {
+        waitUntil: "networkidle2",
+        timeout: 20000
+      }
+    });
+    const payload = await response
+      .clone()
+      .json()
+      .catch(async () => ({ raw: compactText(await response.text().catch(() => ""), 400) }));
+    if (!response.ok || payload?.success === false) {
+      throw new Error(`Browser Run json failed: ${response.status} ${JSON.stringify(payload).slice(0, 600)}`);
     }
-  });
-  const browserMsUsed = response.headers.get("X-Browser-Ms-Used") || "";
-  const payload = await response.json().catch(async () => ({ raw: compactText(await response.text().catch(() => ""), 400) }));
-  if (!response.ok || payload?.success === false) {
-    throw new Error(`Browser Run json failed: ${response.status} ${JSON.stringify(payload).slice(0, 600)}`);
+    browserRun.result = payload?.result || payload;
+    browserRun.json_browser_ms_used = response.headers.get("X-Browser-Ms-Used") || "";
+  } catch (error) {
+    browserRun.json_error = error instanceof Error ? error.message : String(error);
   }
+
+  try {
+    browserRun.screenshot = await captureWebappScreenshot(env, run, handoff, url, index);
+  } catch (error) {
+    browserRun.screenshot_error = error instanceof Error ? error.message : String(error);
+  }
+
+  browserRun.ok = Boolean(browserRun.result || browserRun.screenshot?.ok);
+
   return {
     ...handoff,
-    status: "browser_run_complete",
-    browser_run: {
-      enabled: true,
-      ok: true,
-      browser_ms_used: browserMsUsed,
-      result: payload?.result || payload
-    }
+    status: browserRun.ok ? "browser_run_complete" : "browser_run_failed",
+    browser_run: browserRun
   };
 }
 
-async function auditWebappHandoffs(env, handoffs, shouldStop) {
+async function auditWebappHandoffs(env, run, handoffs, shouldStop) {
   const maxAudits = clampNumber(env.BROWSER_RUN_MAX_WEBAPP_HANDOFFS, 3, 0, 8);
   const results = [];
   for (const [index, handoff] of handoffs.entries()) {
@@ -689,7 +788,7 @@ async function auditWebappHandoffs(env, handoffs, shouldStop) {
       continue;
     }
     try {
-      results.push(await auditSingleWebappHandoff(env, handoff));
+      results.push(await auditSingleWebappHandoff(env, run, handoff, index));
     } catch (error) {
       results.push({
         ...handoff,
@@ -999,7 +1098,7 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
   }
 
   const generatedSuite = buildGeneratedSuite(discovery.map, run);
-  const auditedWebapps = await auditWebappHandoffs(env, generatedSuite.webapp_handoffs || [], shouldStop);
+  const auditedWebapps = await auditWebappHandoffs(env, run, generatedSuite.webapp_handoffs || [], shouldStop);
   if (auditedWebapps.cancelled) {
     return {
       status: "cancelled",
@@ -1012,9 +1111,14 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     };
   }
   generatedSuite.webapp_handoffs = auditedWebapps.handoffs;
+  const webappScreenshots = auditedWebapps.handoffs
+    .map((handoff) => handoff.browser_run?.screenshot?.artifact_name)
+    .filter(Boolean);
+  generatedSuite.source_artifacts = unique([...(generatedSuite.source_artifacts || []), ...webappScreenshots]);
   generatedSuite.coverage = {
     ...generatedSuite.coverage,
-    webappHandoffsAudited: auditedWebapps.handoffs.filter((handoff) => handoff.status === "browser_run_complete").length
+    webappHandoffsAudited: auditedWebapps.handoffs.filter((handoff) => handoff.status === "browser_run_complete").length,
+    webappScreenshots: webappScreenshots.length
   };
   const generatedSuiteAiReview = await aiReview(env, discovery.map, generatedSuite);
   return {
@@ -1024,11 +1128,12 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     bot_map: discovery.map,
     generated_suite: generatedSuite,
     generated_suite_ai_review: generatedSuiteAiReview,
-    screenshot_count: 0,
+    screenshot_count: webappScreenshots.length,
     cloudflare_run: {
       runner: "cloudflare-mtproto",
       node_count: discovery.map.nodes.length,
       edge_count: discovery.map.edges.length,
+      webapp_screenshot_count: webappScreenshots.length,
       ai_enabled: Boolean(generatedSuiteAiReview?.ai?.enabled),
       ai_model: generatedSuiteAiReview?.ai?.model || ""
     }
