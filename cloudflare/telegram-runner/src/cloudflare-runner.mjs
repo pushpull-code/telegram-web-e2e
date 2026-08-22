@@ -220,6 +220,68 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
   }
 }
 
+function countryLookupSchema() {
+  return {
+    type: "json_schema",
+    json_schema: {
+      type: "object",
+      properties: {
+        countryName: { type: "string" },
+        countryCode: { type: "string" },
+        ip: { type: "string" },
+        evidence: { type: "string" }
+      },
+      required: ["countryName", "countryCode", "ip", "evidence"]
+    }
+  };
+}
+
+async function detectBrowserCountry(env, lookupUrls, timeoutMs) {
+  if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
+    return null;
+  }
+  let lastError = "";
+  for (const url of lookupUrls) {
+    try {
+      const response = await env.BROWSER.quickAction("json", {
+        url,
+        prompt: [
+          "Read this IP/country diagnostic page.",
+          "Return countryName, two-letter countryCode if visible/inferable, ip if visible, and short evidence.",
+          "If the page is raw JSON, parse the JSON values."
+        ].join(" "),
+        response_format: countryLookupSchema(),
+        gotoOptions: {
+          waitUntil: "load",
+          timeout: timeoutMs
+        }
+      });
+      const payload = await response
+        .clone()
+        .json()
+        .catch(async () => ({ raw: compactText(await response.text().catch(() => ""), 400) }));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(`Browser country lookup failed: ${response.status}`);
+      }
+      const result = payload?.result || payload;
+      const countryCode = String(result.countryCode || result.country_code || "").trim().toUpperCase();
+      const countryName = normalizeCountryText(result.countryName || result.country_name || countryNameFromCode(countryCode));
+      if (countryName || /^[A-Z]{2}$/.test(countryCode)) {
+        return {
+          countryName: countryName || countryNameFromCode(countryCode),
+          countryCode: /^[A-Z]{2}$/.test(countryCode) ? countryCode : "",
+          ip: result.ip || "",
+          source: `browser:${url}`,
+          evidence: compactText(result.evidence || "", 180)
+        };
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return lastError ? { error: lastError } : null;
+}
+
 async function detectExpectedCountry(env) {
   const overrideCode = String(env.MTPROTO_DEVICE_COUNTRY_CODE || env.MTPROTO_DISCOVERY_EXPECTED_COUNTRY_CODE || "").trim().toUpperCase();
   const overrideName = normalizeCountryText(env.MTPROTO_DEVICE_COUNTRY_NAME || env.MTPROTO_DISCOVERY_EXPECTED_COUNTRY_NAME || "");
@@ -255,6 +317,23 @@ async function detectExpectedCountry(env) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
+  }
+  const browserCountry = await detectBrowserCountry(env, lookupUrls, timeoutMs);
+  if (browserCountry?.countryName || browserCountry?.countryCode) {
+    return browserCountry;
+  }
+  if (browserCountry?.error) {
+    lastError = lastError ? `${lastError}; ${browserCountry.error}` : browserCountry.error;
+  }
+  const fallbackCode = String(env.MTPROTO_DEVICE_COUNTRY_FALLBACK_CODE || "").trim().toUpperCase();
+  const fallbackName = normalizeCountryText(env.MTPROTO_DEVICE_COUNTRY_FALLBACK_NAME || "");
+  if (fallbackName || fallbackCode) {
+    return {
+      countryName: fallbackName || countryNameFromCode(fallbackCode),
+      countryCode: fallbackCode,
+      source: "fallback",
+      error: lastError
+    };
   }
   return {
     countryName: "",
