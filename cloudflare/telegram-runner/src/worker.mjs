@@ -18,6 +18,18 @@ const GENERATED_SELECTOR_SUITES = new Set(["generated_scenario", "generated_scen
 const PANEL_RUN_PREFIX = "panel-run:";
 const PANEL_RUN_TTL_SECONDS = 60 * 60 * 24 * 14;
 const PANEL_RUN_LIST_LIMIT = 30;
+const PANEL_ACTIVE_RUN_WINDOW_MS = 2 * 60 * 60 * 1000;
+const PANEL_TERMINAL_STATUSES = new Set([
+  "success",
+  "failure",
+  "failed",
+  "completed",
+  "cancelled",
+  "timed_out",
+  "skipped",
+  "dispatch_failed",
+  "reported"
+]);
 
 const TEXT = {
   [LANG_RU]: {
@@ -250,6 +262,72 @@ function appendPanelEvent(run, event) {
     ...run,
     events: [...events, { time: nowIso(), ...event }].slice(-50)
   };
+}
+
+function normalizedPanelRunStatus(run) {
+  return String(run?.github_live?.conclusion || run?.github?.conclusion || run?.status || "").trim().toLowerCase();
+}
+
+function isTerminalPanelRun(run) {
+  const status = normalizedPanelRunStatus(run);
+  return PANEL_TERMINAL_STATUSES.has(status);
+}
+
+function isActivePanelRun(run) {
+  if (!run || isTerminalPanelRun(run)) {
+    return false;
+  }
+  const timestamp = Date.parse(String(run.updated_at || run.created_at || ""));
+  if (Number.isFinite(timestamp) && Date.now() - timestamp > PANEL_ACTIVE_RUN_WINDOW_MS) {
+    return false;
+  }
+  return true;
+}
+
+function samePanelRunRequest(run, criteria) {
+  return (
+    normalizeBotUsername(run?.bot_username) === normalizeBotUsername(criteria?.botUsername) &&
+    String(run?.start_payload || "").trim() === String(criteria?.startPayload || "").trim() &&
+    String(run?.suite || "").trim() === String(criteria?.suite || "").trim() &&
+    String(run?.selector || "").trim() === String(criteria?.selector || "").trim()
+  );
+}
+
+async function refreshPanelRunTerminalState(env, run) {
+  const runId = run?.github_run_id || runIdFromUrl(run?.github_run_url);
+  if (!runId) {
+    return run;
+  }
+  try {
+    const githubLive = await fetchGithubRunDetails(env, runId);
+    if (!githubLive || !isTerminalPanelRun({ ...run, github_live: githubLive })) {
+      return run;
+    }
+    const next = {
+      ...run,
+      status: githubLive.conclusion || githubLive.status || run.status,
+      github_live: githubLive,
+      updated_at: nowIso()
+    };
+    await savePanelRun(env, next);
+    return next;
+  } catch (_) {
+    return run;
+  }
+}
+
+async function findActivePanelRun(env, criteria) {
+  const runs = await listPanelRuns(env);
+  for (const run of runs) {
+    if (!samePanelRunRequest(run, criteria) || !isActivePanelRun(run)) {
+      continue;
+    }
+    const refreshed = await refreshPanelRunTerminalState(env, run);
+    if (isActivePanelRun(refreshed)) {
+      return refreshed;
+    }
+  }
+  return null;
 }
 
 function compactPanelDrafts(generatedSuite) {
@@ -902,7 +980,7 @@ function decodeBase64(input) {
   return bytes;
 }
 
-async function githubJson(env, path) {
+async function githubApi(env, path, options = {}) {
   const owner = String(env.GITHUB_OWNER || "").trim();
   const repo = String(env.GITHUB_REPO || "").trim();
   const githubToken = String(env.GITHUB_PAT || "").trim();
@@ -910,18 +988,35 @@ async function githubJson(env, path) {
     throw new Error("Missing GITHUB_OWNER/GITHUB_REPO/GITHUB_PAT");
   }
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}${path}`, {
+    method: options.method || "GET",
     headers: {
       authorization: `Bearer ${githubToken}`,
       accept: "application/vnd.github+json",
       "user-agent": "telegram-e2e-runner-panel",
-      "x-github-api-version": "2022-11-28"
-    }
+      "x-github-api-version": "2022-11-28",
+      ...(options.body ? { "content-type": "application/json" } : {})
+    },
+    body: options.body
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`GitHub API failed: ${response.status} ${text}`);
   }
-  return response.json();
+  const text = await response.text().catch(() => "");
+  return text ? JSON.parse(text) : {};
+}
+
+async function githubJson(env, path) {
+  return githubApi(env, path);
+}
+
+async function cancelGithubRun(env, runId) {
+  const safeRunId = String(runId || "").trim();
+  if (!safeRunId) {
+    return false;
+  }
+  await githubApi(env, `/actions/runs/${encodeURIComponent(safeRunId)}/cancel`, { method: "POST" });
+  return true;
 }
 
 async function fetchGithubRunDetails(env, runId) {
@@ -1023,11 +1118,14 @@ function panelHtml() {
       color: #fff;
       border-color: var(--accent);
     }
+    button:disabled { cursor: wait; opacity: 0.65; }
     button.secondary { background: #fff; color: var(--ink); border-color: var(--line); }
+    button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
     button.inline { width: auto; min-width: 108px; padding: 8px 10px; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row > * { min-width: 0; }
     .topbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .top-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 16px; }
     .tab {
       width: auto;
@@ -1112,6 +1210,7 @@ function panelHtml() {
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
       main { padding: 16px; }
       .topbar { align-items: stretch; flex-direction: column; }
+      .top-actions { justify-content: stretch; }
       .row { flex-direction: column; align-items: stretch; }
       button.inline { width: 100%; }
     }
@@ -1161,7 +1260,10 @@ function panelHtml() {
           <h1 id="runTitle">Прогон не выбран</h1>
           <div id="runMeta" class="muted">Создай новый прогон или выбери существующий слева.</div>
         </div>
-        <button id="runSelected" class="inline secondary">Запустить выбранное</button>
+        <div class="top-actions">
+          <button id="cancelRun" class="inline danger" hidden>Отменить</button>
+          <button id="runSelected" class="inline secondary">Запустить выбранное</button>
+        </div>
       </div>
       <div class="tabs">
         <button class="tab active" data-tab="progress">Прогресс</button>
@@ -1179,7 +1281,12 @@ function panelHtml() {
     </main>
   </div>
   <script>
-    const state = { runId: new URLSearchParams(location.search).get("run") || "", poll: null };
+    const state = {
+      runId: new URLSearchParams(location.search).get("run") || "",
+      poll: null,
+      creating: false,
+      cancelling: false
+    };
     const q = (selector) => document.querySelector(selector);
     const qa = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -1211,7 +1318,7 @@ function panelHtml() {
       const text = String(value || "").toLowerCase();
       if (text === "success" || text === "completed" || text === "passed" || text === "pass") return "ok";
       if (text === "failure" || text === "failed" || text === "fail" || text === "cancelled" || text === "timed_out" || text === "critical" || text === "high") return "bad";
-      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "warning" || text === "medium") return "warn";
+      if (text === "queued" || text === "requested" || text === "running" || text === "in_progress" || text === "cancel_requested" || text === "warning" || text === "medium") return "warn";
       return "";
     }
 
@@ -1236,6 +1343,8 @@ function panelHtml() {
         failure: "ошибка",
         failed: "ошибка",
         cancelled: "отменён",
+        cancel_requested: "отменяется",
+        dispatch_failed: "ошибка запуска",
         timed_out: "таймаут",
         passed: "прошло",
         pass: "прошло",
@@ -1257,6 +1366,28 @@ function panelHtml() {
 
     function setMessage(text) {
       q("#message").textContent = text || "";
+    }
+
+    function isLiveStatus(value) {
+      const text = String(value || "").toLowerCase();
+      return ["queued", "requested", "waiting", "pending", "in_progress", "running", "cancel_requested"].includes(text);
+    }
+
+    function setCreateBusy(isBusy) {
+      state.creating = isBusy;
+      const startButton = q("#startRun");
+      const selectedButton = q("#runSelected");
+      startButton.disabled = isBusy;
+      selectedButton.disabled = isBusy;
+      startButton.textContent = isBusy ? "Запускаю..." : "Запустить";
+      selectedButton.textContent = isBusy ? "Запускаю..." : "Запустить выбранное";
+    }
+
+    function setCancelBusy(isBusy) {
+      state.cancelling = isBusy;
+      const button = q("#cancelRun");
+      button.disabled = isBusy;
+      button.textContent = isBusy ? "Отменяю..." : "Отменить";
     }
 
     async function loadRuns() {
@@ -1400,7 +1531,10 @@ function panelHtml() {
       if (run.suite) q("#suite").value = run.suite;
       if (run.selector) q("#selector").value = ["smart", "safe", "all-safe", "runnable", "dev"].includes(run.selector) ? run.selector : "smart";
       if (run.max_drafts) q("#maxDrafts").value = run.max_drafts;
-      const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running"].includes(String(status).toLowerCase());
+      const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running", "cancel_requested"].includes(String(status).toLowerCase());
+      const canCancel = state.runId && (isLiveStatus(status) || isLiveStatus(run.status));
+      q("#cancelRun").hidden = !canCancel;
+      q("#cancelRun").disabled = state.cancelling;
       if (keepPolling) schedulePoll();
     }
 
@@ -1419,19 +1553,40 @@ function panelHtml() {
     }
 
     async function createRun(selectorOverride) {
-      setMessage("");
-      const body = {
-        bot_username: q("#botUsername").value.trim(),
-        start_payload: q("#startPayload").value.trim(),
-        suite: q("#suite").value,
-        selector: selectorOverride || q("#selector").value,
-        max_drafts: q("#maxDrafts").value
-      };
-      const payload = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
-      state.runId = payload.run.id;
-      history.replaceState(null, "", "?run=" + encodeURIComponent(state.runId));
-      await loadRuns();
-      renderRun(payload);
+      if (state.creating) return;
+      setCreateBusy(true);
+      setMessage("Запускаю прогон...");
+      try {
+        const body = {
+          bot_username: q("#botUsername").value.trim(),
+          start_payload: q("#startPayload").value.trim(),
+          suite: q("#suite").value,
+          selector: selectorOverride || q("#selector").value,
+          max_drafts: q("#maxDrafts").value
+        };
+        const payload = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
+        state.runId = payload.run.id;
+        history.replaceState(null, "", "?run=" + encodeURIComponent(state.runId));
+        await loadRuns();
+        renderRun(payload);
+        setMessage(payload.reused ? "Уже есть активный прогон для этого бота, открыл его." : "");
+      } finally {
+        setCreateBusy(false);
+      }
+    }
+
+    async function cancelRun() {
+      if (!state.runId || state.cancelling) return;
+      setCancelBusy(true);
+      setMessage("Отправляю отмену...");
+      try {
+        const payload = await api("/api/runs/" + encodeURIComponent(state.runId) + "/cancel", { method: "POST" });
+        await loadRuns();
+        renderRun(payload);
+        setMessage("Отмена отправлена.");
+      } finally {
+        setCancelBusy(false);
+      }
     }
 
     qa(".tab").forEach((button) => {
@@ -1446,6 +1601,7 @@ function panelHtml() {
     });
     q("#startRun").addEventListener("click", () => createRun().catch((error) => setMessage(error.message)));
     q("#refresh").addEventListener("click", () => Promise.all([loadRuns(), loadRun()]).catch((error) => setMessage(error.message)));
+    q("#cancelRun").addEventListener("click", () => cancelRun().catch((error) => setMessage(error.message)));
     q("#runSelected").addEventListener("click", () => {
       const ids = qa('#tab-branches input[type="checkbox"]:checked').map((input) => input.value).filter(Boolean);
       if (!ids.length) {
@@ -1487,6 +1643,16 @@ async function handlePanelRunCreate(env, request) {
   }
   const selector = suite === "generated_scenarios" ? String(body.selector || "smart").trim() || "smart" : "";
   const maxDrafts = clampNumber(body.max_drafts, 8, 1, 50);
+  const activeRun = await findActivePanelRun(env, {
+    botUsername,
+    startPayload: body.start_payload,
+    suite,
+    selector
+  });
+  if (activeRun) {
+    return jsonResponse({ run: activeRun, reused: true });
+  }
+
   const panelRunId = crypto.randomUUID();
   const callbackUrl = String(env.REPORT_CALLBACK_URL || "").trim() || new URL("/github/report", request.url).toString();
   const createdAt = nowIso();
@@ -1519,6 +1685,29 @@ async function handlePanelRunCreate(env, request) {
       maxDrafts,
       reportCallbackUrlOverride: callbackUrl
     });
+    const latestRun = await loadPanelRun(env, panelRunId);
+    if (latestRun && ["cancelled", "cancel_requested"].includes(String(latestRun.status || "").toLowerCase())) {
+      const githubRunId = dispatch.runId || runIdFromUrl(dispatch.runUrl);
+      if (githubRunId) {
+        await cancelGithubRun(env, githubRunId).catch(() => false);
+      }
+      run = appendPanelEvent(
+        {
+          ...latestRun,
+          status: githubRunId ? "cancel_requested" : "cancelled",
+          github_run_id: githubRunId,
+          github_run_url: dispatch.runUrl,
+          updated_at: nowIso()
+        },
+        {
+          phase: "отмена",
+          status: githubRunId ? "cancel_requested" : "cancelled",
+          message: githubRunId ? "Прогон был отменён во время запуска, отмена отправлена в GitHub" : "Прогон отменён до запуска GitHub Actions"
+        }
+      );
+      await savePanelRun(env, run);
+      return jsonResponse({ run });
+    }
     run = appendPanelEvent(
       {
         ...run,
@@ -1543,6 +1732,65 @@ async function handlePanelRunCreate(env, request) {
     );
     await savePanelRun(env, run);
     return jsonResponse({ error: run.error, run }, 500);
+  }
+}
+
+async function handlePanelRunCancel(env, request, id) {
+  const authResponse = requirePanelAuthorization(env, request);
+  if (authResponse) {
+    return authResponse;
+  }
+  if (!env.BOT_STATE_KV) {
+    return jsonResponse({ error: "Не настроено хранилище BOT_STATE_KV" }, 500);
+  }
+  const run = await loadPanelRun(env, id);
+  if (!run) {
+    return jsonResponse({ error: "Прогон не найден" }, 404);
+  }
+
+  const refreshed = await refreshPanelRunTerminalState(env, run);
+  if (isTerminalPanelRun(refreshed)) {
+    return jsonResponse({ run: refreshed, already_terminal: true });
+  }
+
+  const githubRunId = refreshed.github_run_id || runIdFromUrl(refreshed.github_run_url);
+  if (!githubRunId) {
+    const next = appendPanelEvent(
+      {
+        ...refreshed,
+        status: "cancelled",
+        updated_at: nowIso()
+      },
+      { phase: "отмена", status: "cancelled", message: "Прогон отменён до запуска GitHub Actions" }
+    );
+    await savePanelRun(env, next);
+    return jsonResponse({ run: next });
+  }
+
+  try {
+    await cancelGithubRun(env, githubRunId);
+    const next = appendPanelEvent(
+      {
+        ...refreshed,
+        status: "cancel_requested",
+        github_run_id: githubRunId,
+        updated_at: nowIso()
+      },
+      { phase: "отмена", status: "cancel_requested", message: "Отмена отправлена в GitHub Actions" }
+    );
+    await savePanelRun(env, next);
+    return jsonResponse({ run: next });
+  } catch (error) {
+    const next = appendPanelEvent(
+      {
+        ...refreshed,
+        updated_at: nowIso(),
+        cancel_error: error instanceof Error ? error.message : String(error)
+      },
+      { phase: "отмена", status: "cancel_failed", message: error instanceof Error ? error.message : String(error) }
+    );
+    await savePanelRun(env, next);
+    return jsonResponse({ error: next.cancel_error, run: next }, 500);
   }
 }
 
@@ -1799,6 +2047,10 @@ export default {
     }
     if (url.pathname === "/api/runs" && request.method === "POST") {
       return handlePanelRunCreate(env, request);
+    }
+    const panelRunCancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+    if (panelRunCancelMatch && request.method === "POST") {
+      return handlePanelRunCancel(env, request, panelRunCancelMatch[1]);
     }
     const panelRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (panelRunMatch && request.method === "GET") {
