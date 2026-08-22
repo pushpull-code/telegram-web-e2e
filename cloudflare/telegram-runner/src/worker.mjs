@@ -330,7 +330,9 @@ function formatGeneratedSuiteText(lang, generatedSuite) {
       ? `, ${generatedSuiteLabel(lang, "steps")}: ${passedSteps}/${stepCount}${warningSteps > 0 ? `, ${generatedSuiteLabel(lang, "warning")}: ${warningSteps}` : ""}`
       : "";
     const attemptsText = attempts > 1 ? `, ${generatedSuiteLabel(lang, "attempts")}: ${attempts}` : "";
-    lines.push(`- ${id}: ${status}${stepText}${attemptsText}`);
+    const aiSeverity = compactReportText(draft?.ai_severity, 40);
+    const aiText = aiSeverity ? `, AI: ${aiSeverity}` : "";
+    lines.push(`- ${id}: ${status}${stepText}${attemptsText}${aiText}`);
 
     const firstError = compactReportText(draft?.first_error, 220);
     if (firstError && String(draft?.status || "").toLowerCase() !== "passed") {

@@ -157,7 +157,7 @@ When AI is enabled, the review follows `telegram-bot-qa-v2`: overall bot view, b
 `qa-report.md` is the readable report built from the staged AI output, with heuristic fallback when AI is disabled or returns an invalid shape.
 `telegram-summary.txt` is a short sendable summary for chat/reporting integrations.
 `generated-test-plan.json` normalizes AI scenario ideas, branch checks, defects, coverage gaps, questions, web targets, and next-run settings for the future executable scenario generator.
-`generated-scenarios.json` converts the discovered map into scenario-runner draft JSON. Each draft has `runnableNow`, `safety`, `blocker`, `reason`, `source`, and a ready `scenario` object only when the current runner can execute it safely after review.
+`generated-scenarios.json` converts the discovered map into scenario-runner draft JSON. Each draft has `runnableNow`, `safety`, `blocker`, `reason`, optional `aiGuidance`, `source`, and a ready `scenario` object only when the current runner can execute it safely after review.
 URL/WebApp checks open terminal URL buttons in Chromium, collect status/title/final URL, screenshot, page text sample, headings, visible links/buttons/inputs/forms, console messages, and failed requests. Full URL query/hash values are sanitized in AI/report artifacts.
 Safe clicks are disabled by default. When `MTPROTO_DISCOVERY_WEB_SAFE_CLICKS=1`, the runner only clicks limited same-origin non-destructive link/button candidates and records after-click URL/title/screenshot/network evidence.
 
@@ -201,6 +201,7 @@ Batch selectors:
 
 - `safe`: observed safe drafts only; this is the default for CI.
 - `all-safe`: all runnable safe drafts, including baseline command drafts.
+- `smart`: AI-prioritized runnable drafts, safe by default; test-account drafts are included only when explicitly allowed.
 - `runnable`: safe plus `test-account` drafts when `GENERATED_SCENARIO_ALLOW_TEST_ACCOUNT=1`.
 - `dev` / `unsafe`: dev-bot mode; enables test-account drafts and unsafe button paths through `GENERATED_SCENARIO_ALLOW_UNSAFE_BUTTONS=1` and `MTPROTO_DISCOVERY_ALLOW_UNSAFE_BUTTONS=1`.
 - `draft-a,draft-b`: explicit draft ids.
@@ -224,7 +225,7 @@ bot | mtproto | discover_mtproto | generated_scenario | generated_scenarios | sc
 - `generated_scenario_max_drafts`: default `4`
 - `generated_scenario_allow_test_account`: default `false`
 
-The uploaded test artifact includes the scenario runner output plus `generated-scenario-source/` with the source discovery files and extracted `scenario.json` or `scenario-suite.json`.
+The uploaded test artifacts include a lightweight `generated-scenario-source` artifact with the source discovery files and extracted suite, plus the full Playwright artifacts for screenshots/traces.
 For `generated_scenarios`, it also includes `generated-scenario-suite-report.md`/`.json` and `generated-scenario-ai-review.md`/`.json` so the bot and AI critic can review the full picture, not just one failed step.
 When a Cloudflare report callback is configured, `send_cloudflare_report.mjs` includes bounded `generated_suite` and `generated_suite_ai_review` payloads; the Telegram runner worker renders compact branch-check and AI-review blocks.
 

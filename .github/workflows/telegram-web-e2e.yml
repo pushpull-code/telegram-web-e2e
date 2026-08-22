@@ -20,7 +20,7 @@ on:
         required: false
         default: 'false'
       generated_scenario_drafts:
-        description: 'Selector for generated_scenarios suite: safe | all-safe | runnable | dev | comma-separated draft ids'
+        description: 'Selector for generated_scenarios suite: safe | all-safe | smart | runnable | dev | comma-separated draft ids'
         required: false
         default: 'safe'
       generated_scenario_max_drafts:

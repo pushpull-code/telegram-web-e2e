@@ -190,6 +190,7 @@ function buildDraftResults(suite, reportsByScenario) {
       id: draft.id,
       safety: draft.safety,
       reason: draft.reason || "",
+      aiGuidance: draft.aiGuidance || null,
       sourceType: draft.source?.type || "",
       scenario: scenarioName,
       status,
@@ -277,6 +278,11 @@ function buildMarkdown(payload) {
     }
     if (draft.reason) {
       lines.push(`- Purpose: ${cleanLine(draft.reason, 220)}`);
+    }
+    if (draft.aiGuidance?.severity) {
+      lines.push(
+        `- AI: ${cleanLine(draft.aiGuidance.severity, 40)} severity, ${cleanLine(draft.aiGuidance.confidence, 40)} confidence`
+      );
     }
     if (draft.attempts > 0) {
       lines.push(`- Attempts: ${draft.attempts}`);

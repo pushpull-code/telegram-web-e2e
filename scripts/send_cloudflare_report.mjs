@@ -93,6 +93,7 @@ function readGeneratedSuiteReport() {
         status: compactText(draft?.status, 40),
         scenario: compactText(draft?.scenario, 120),
         safety: compactText(draft?.safety, 40),
+        ai_severity: compactText(draft?.aiGuidance?.severity, 40),
         source_type: compactText(draft?.sourceType, 80),
         attempts: Number.isFinite(Number(draft?.attempts)) ? Number(draft.attempts) : 0,
         step_count: steps.length,

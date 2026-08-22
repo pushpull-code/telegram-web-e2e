@@ -14,6 +14,7 @@ function usage() {
     "  safe                 runnable safe drafts with observed evidence only",
     "  all-safe             all runnable safe drafts",
     "  runnable             safe drafts plus test-account drafts when explicitly allowed",
+    "  smart                AI-prioritized runnable drafts, safe by default",
     "  dev                  all executable drafts for a dedicated dev/test bot",
     "  draft-a,draft-b      explicit draft ids",
     "",
@@ -113,6 +114,19 @@ function countBySourceType(drafts) {
   return counts;
 }
 
+function severityRank(value) {
+  return { critical: 4, high: 3, medium: 2, low: 1 }[String(value || "").toLowerCase()] || 0;
+}
+
+function smartDraftScore(draft) {
+  const aiScore = severityRank(draft?.aiGuidance?.severity);
+  const sourceType = String(draft?.source?.type || "");
+  const safety = String(draft?.safety || "");
+  const sourceScore = sourceType === "start" ? 5 : sourceType === "command" ? 4 : sourceType === "button-path" ? 3 : 1;
+  const safetyScore = safety === "safe" ? 2 : safety === "test-account" ? 1 : 0;
+  return aiScore * 10 + sourceScore + safetyScore;
+}
+
 function buildCoverage(drafts, selectedBeforeLimit, selectedAfterLimit, selector, maxDrafts, allowTestAccount) {
   return {
     selector: selector || "safe",
@@ -151,6 +165,16 @@ function selectDrafts(bundle, selector, allowTestAccount) {
         isExecutableDraft(draft) &&
         (draft.safety === "safe" || (draft.safety === "test-account" && canRunTestAccount))
     );
+  }
+
+  if (normalized === "smart") {
+    return drafts
+      .filter(
+        (draft) =>
+          isExecutableDraft(draft) &&
+          (draft.safety === "safe" || (draft.safety === "test-account" && canRunTestAccount))
+      )
+      .sort((left, right) => smartDraftScore(right) - smartDraftScore(left));
   }
 
   if (devMode) {
@@ -208,6 +232,7 @@ const suite = {
     id: draft.id,
     safety: draft.safety,
     reason: draft.reason,
+    aiGuidance: draft.aiGuidance || null,
     source: draft.source,
     scenario: draft.scenario
   }))

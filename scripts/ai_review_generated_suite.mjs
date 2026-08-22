@@ -138,6 +138,7 @@ function buildInputPayload(suiteReportPath) {
         id: draft?.id || "",
         safety: draft?.safety || "",
         reason: draft?.reason || "",
+        aiGuidance: draft?.aiGuidance || null,
         sourceType: draft?.sourceType || "",
         scenario: draft?.scenario || "",
         status: draft?.status || "",
@@ -197,6 +198,7 @@ function buildInputPayload(suiteReportPath) {
             safety: draft?.safety || "",
             blocker: draft?.blocker || null,
             reason: draft?.reason || "",
+            aiGuidance: draft?.aiGuidance || null,
             source: draft?.source || null,
             scenarioSteps: Array.isArray(draft?.scenario?.steps) ? draft.scenario.steps.length : 0
           }))

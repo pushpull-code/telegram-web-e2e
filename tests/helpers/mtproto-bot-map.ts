@@ -285,6 +285,15 @@ export type GeneratedExecutableScenarioDraft = {
   safety: "safe" | "test-account" | "manual";
   blocker: string | null;
   reason: string;
+  aiGuidance?: {
+    severity: AiSeverity;
+    confidence: AiConfidence;
+    inferredPurpose: string;
+    expectedBehavior: string[];
+    risks: string[];
+    tests: string[];
+    missingEvidence: string[];
+  };
   source: {
     type: "start" | "command" | "button-path" | "web-target" | "skipped-button";
     nodeId?: string;
@@ -1643,6 +1652,23 @@ function branchPriority(enriched: EnrichedBotMap, node: BotMapNode): number {
   return { critical: 4, high: 3, medium: 2, low: 1 }[severity];
 }
 
+function aiGuidanceForNode(enriched: EnrichedBotMap, node: BotMapNode): GeneratedExecutableScenarioDraft["aiGuidance"] {
+  const branch = enriched.enrichment.ai.report?.branchReviews.find((item) => item.nodeId === node.id);
+  if (!branch) {
+    return undefined;
+  }
+
+  return {
+    severity: branch.severity,
+    confidence: branch.confidence,
+    inferredPurpose: branch.inferredPurpose,
+    expectedBehavior: branch.expectedBehavior,
+    risks: branch.risks,
+    tests: branch.tests,
+    missingEvidence: branch.missingEvidence
+  };
+}
+
 function buttonPathScenario(enriched: EnrichedBotMap, node: BotMapNode): GeneratedExecutableScenarioDefinition {
   const steps: GeneratedExecutableScenarioStep[] = [startStep(enriched)];
 
@@ -1682,10 +1708,14 @@ function buttonPathDrafts(enriched: EnrichedBotMap): GeneratedExecutableScenario
     seen.add(key);
 
     const safety = pathSafety(node.path);
+    const aiGuidance = aiGuidanceForNode(enriched, node);
     drafts.push({
       id: `button-path-${normalizeNodeIdPart(node.path.join("-"))}`,
       ...safety,
-      reason: `Discovered branch path: ${node.path.join(" > ")}.`,
+      reason: aiGuidance?.inferredPurpose
+        ? `AI: ${aiGuidance.inferredPurpose}`
+        : `Discovered branch path: ${node.path.join(" > ")}.`,
+      ...(aiGuidance ? { aiGuidance } : {}),
       source: {
         type: "button-path",
         nodeId: node.id,
