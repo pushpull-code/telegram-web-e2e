@@ -5,7 +5,7 @@ Cloudflare Worker for Telegram bot orchestration:
 - RU/EN language selection on `/start`
 - language preference persisted in KV
 - scenario menu (currently one scenario)
-- starts GitHub Actions workflow run
+- starts Cloudflare MTProto runner or GitHub Actions fallback run
 - receives completion callback and sends report to Telegram with duration, scenario, run link, screenshots
 - asks user if a new test should be started
 - accepts direct commands like `/run generated_scenarios safe`
@@ -31,6 +31,8 @@ npx wrangler secret put GITHUB_PAT
 npx wrangler secret put GITHUB_OWNER
 npx wrangler secret put GITHUB_REPO
 npx wrangler secret put REPORT_TOKEN
+npx wrangler secret put MTPROTO_SERVICE_TOKEN
+npx wrangler secret put AI_API_KEY
 ```
 
 Optional secret (lock bot to one chat only):
@@ -103,6 +105,7 @@ https://<worker-url>/panel
 Панель умеет:
 
 - запускать GitHub Actions прогон по username бота и опциональному `/start` payload;
+- запускать Cloudflare MTProto прогон без расхода GitHub Actions minutes;
 - показывать live-прогресс GitHub jobs/steps;
 - показывать документы, которые создаются во время прогона;
 - показывать компактное дерево логики из `generated-scenario-suite-report.json`;
@@ -112,11 +115,14 @@ https://<worker-url>/panel
 
 ```text
 suite: generated_scenarios
+engine: cloudflare
 selector: smart
 max drafts: 8
 ```
 
 Для отдельного dev/test бота используй selector `dev`: он разрешает более глубокий проход и state-changing ветки согласно safety-настройкам workflow.
+
+Cloudflare engine выполняет MTProto discovery, строит карту веток, генерирует короткий AI/fallback-разбор и сохраняет результат в KV без создания GitHub Actions run. GitHub Actions engine нужен для полного Playwright-прогона со скриншотами/trace и тяжелыми WebApp-проверками, пока они не вынесены в Cloudflare Browser Run/Containers.
 
 ## Telegram commands
 

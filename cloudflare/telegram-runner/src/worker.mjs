@@ -1,3 +1,5 @@
+import { executeCloudflareNativeRun, isCloudflareNativeSuite } from "./cloudflare-runner.mjs";
+
 const LANG_RU = "ru";
 const LANG_EN = "en";
 const SCENARIO_START_FINISH = "start_finish";
@@ -104,6 +106,17 @@ function normalizeSuite(value, fallback = "autorun") {
   }
   const fallbackNormalized = String(fallback || "").trim().toLowerCase();
   return REQUIRED_SUITES.has(fallbackNormalized) ? fallbackNormalized : "autorun";
+}
+
+function normalizePanelEngine(value, suite) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["github", "github_actions", "actions"].includes(normalized)) {
+    return "github";
+  }
+  if (["cloudflare", "cf", "native"].includes(normalized)) {
+    return "cloudflare";
+  }
+  return isCloudflareNativeSuite(suite) ? "cloudflare" : "github";
 }
 
 function stripCommandMention(text) {
@@ -289,7 +302,8 @@ function samePanelRunRequest(run, criteria) {
     normalizeBotUsername(run?.bot_username) === normalizeBotUsername(criteria?.botUsername) &&
     String(run?.start_payload || "").trim() === String(criteria?.startPayload || "").trim() &&
     String(run?.suite || "").trim() === String(criteria?.suite || "").trim() &&
-    String(run?.selector || "").trim() === String(criteria?.selector || "").trim()
+    String(run?.selector || "").trim() === String(criteria?.selector || "").trim() &&
+    normalizePanelEngine(run?.engine, run?.suite) === normalizePanelEngine(criteria?.engine, criteria?.suite)
   );
 }
 
@@ -1061,6 +1075,86 @@ async function fetchGithubRunDetails(env, runId) {
   };
 }
 
+async function isPanelRunCancelled(env, id) {
+  const current = await loadPanelRun(env, id);
+  return ["cancelled", "cancel_requested"].includes(String(current?.status || "").trim().toLowerCase());
+}
+
+async function runCloudflarePanelRun(env, panelRunId) {
+  let run = await loadPanelRun(env, panelRunId);
+  if (!run || !env.BOT_STATE_KV) {
+    return;
+  }
+
+  run = appendPanelEvent(
+    {
+      ...run,
+      status: "running",
+      engine: "cloudflare",
+      updated_at: nowIso()
+    },
+    { phase: "cloudflare", status: "running", message: "Cloudflare MTProto runner начал прогон" }
+  );
+  await savePanelRun(env, run);
+
+  try {
+    const result = await executeCloudflareNativeRun(env, run, {
+      shouldStop: () => isPanelRunCancelled(env, panelRunId)
+    });
+    const latest = (await loadPanelRun(env, panelRunId)) || run;
+    if (["cancelled", "cancel_requested"].includes(String(latest.status || "").trim().toLowerCase())) {
+      await savePanelRun(
+        env,
+        appendPanelEvent(
+          {
+            ...latest,
+            status: "cancelled",
+            completed_at: nowIso(),
+            updated_at: nowIso()
+          },
+          { phase: "cloudflare", status: "cancelled", message: "Cloudflare runner остановлен после отмены" }
+        )
+      );
+      return;
+    }
+
+    const next = appendPanelEvent(
+      {
+        ...latest,
+        ...result,
+        engine: "cloudflare",
+        updated_at: nowIso()
+      },
+      {
+        phase: "cloudflare",
+        status: result.status || "success",
+        message:
+          result.status === "success"
+            ? "Cloudflare MTProto runner завершил прогон"
+            : result.status === "cancelled"
+              ? "Cloudflare MTProto runner отменён"
+              : "Cloudflare MTProto runner завершился с ошибкой"
+      }
+    );
+    await savePanelRun(env, next);
+  } catch (error) {
+    const latest = (await loadPanelRun(env, panelRunId)) || run;
+    const message = error instanceof Error ? error.message : String(error);
+    const next = appendPanelEvent(
+      {
+        ...latest,
+        status: "failure",
+        error: message,
+        engine: "cloudflare",
+        completed_at: nowIso(),
+        updated_at: nowIso()
+      },
+      { phase: "cloudflare", status: "failure", message }
+    );
+    await savePanelRun(env, next);
+  }
+}
+
 function panelHtml() {
   return `<!doctype html>
 <html lang="ru">
@@ -1237,6 +1331,11 @@ function panelHtml() {
           <input id="maxDrafts" type="number" min="1" max="50" value="8">
         </div>
       </div>
+      <label for="engine">Движок</label>
+      <select id="engine">
+        <option value="cloudflare">Cloudflare MTProto</option>
+        <option value="github">GitHub Actions</option>
+      </select>
       <label for="selector">Выбор веток</label>
       <select id="selector">
         <option value="smart">умный выбор</option>
@@ -1327,6 +1426,8 @@ function panelHtml() {
       const labels = {
         generated_scenarios: "карта + AI + тест веток",
         discover_mtproto: "только карта",
+        cloudflare: "Cloudflare",
+        github: "GitHub Actions",
         smart: "умный выбор",
         safe: "безопасные",
         "all-safe": "все безопасные",
@@ -1395,7 +1496,7 @@ function panelHtml() {
       const runs = payload.runs || [];
       q("#runList").innerHTML = runs.length ? runs.map((run) => {
         return '<div class="run-row"><div><b>' + escapeHtml(run.bot_username || run.id) + '</b><div class="muted mono">' +
-          escapeHtml(uiLabel(run.status || "queued") + " · " + (run.created_at || "")) +
+          escapeHtml(uiLabel(run.status || "queued") + " · " + uiLabel(run.engine || "cloudflare") + " · " + (run.created_at || "")) +
           '</div></div><button class="inline secondary" data-open-run="' + escapeHtml(run.id) + '">Открыть</button></div>';
       }).join("") : '<div class="muted">Прогонов пока нет.</div>';
       qa("[data-open-run]").forEach((button) => {
@@ -1420,6 +1521,21 @@ function panelHtml() {
               escapeHtml(step.name || "") + '</span><span>' + escapeHtml(uiLabel(step.conclusion || step.status || "")) + '</span></div>';
           }).join("") + '</div></div>';
       }).join("");
+    }
+
+    function renderExecutionDetails(run, github) {
+      if (run.engine === "cloudflare") {
+        const cf = run.cloudflare_run || {};
+        const lines = [
+          cf.runner ? "runner: " + cf.runner : "runner: cloudflare-mtproto",
+          Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
+          Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
+          cf.ai_model ? "AI: " + cf.ai_model : "",
+          run.duration_sec ? "время: " + run.duration_sec + " сек." : ""
+        ].filter(Boolean);
+        return '<div class="item"><b>Cloudflare runner</b><pre>' + escapeHtml(lines.join("\\n") || "Выполняется в Cloudflare.") + '</pre></div>';
+      }
+      return renderJobs(github);
     }
 
     function renderDocuments(run) {
@@ -1512,6 +1628,7 @@ function panelHtml() {
       q("#runMeta").innerHTML = [
         pill(run.suite || "generated_scenarios"),
         pill(run.selector || "smart"),
+        pill(run.engine || "cloudflare"),
         pill(status, statusKind(status)),
         github.html_url ? '<a href="' + escapeHtml(github.html_url) + '" target="_blank" rel="noreferrer">Прогон в GitHub</a>' : ''
       ].join(" ");
@@ -1521,7 +1638,7 @@ function panelHtml() {
         '</div><div class="item"><b>События</b>' + ((run.events || []).length ? (run.events || []).map((event) => {
           return '<div class="item"><span class="mono">' + escapeHtml(event.time || "") + '</span> ' +
             escapeHtml([event.phase, uiLabel(event.status), event.message].filter(Boolean).join(" · ")) + '</div>';
-        }).join("") : '<div class="muted">Событий пока нет.</div>') + '</div>' + renderJobs(github);
+        }).join("") : '<div class="muted">Событий пока нет.</div>') + '</div>' + renderExecutionDetails(run, github);
       q("#tab-documents").innerHTML = renderDocuments(run);
       q("#tab-tree").innerHTML = renderLogicTree(run);
       q("#tab-branches").innerHTML = renderBranches(run);
@@ -1529,6 +1646,7 @@ function panelHtml() {
       if (run.bot_username) q("#botUsername").value = run.bot_username;
       if (run.start_payload) q("#startPayload").value = run.start_payload;
       if (run.suite) q("#suite").value = run.suite;
+      if (run.engine) q("#engine").value = run.engine === "github" ? "github" : "cloudflare";
       if (run.selector) q("#selector").value = ["smart", "safe", "all-safe", "runnable", "dev"].includes(run.selector) ? run.selector : "smart";
       if (run.max_drafts) q("#maxDrafts").value = run.max_drafts;
       const keepPolling = ["queued", "requested", "waiting", "pending", "in_progress", "running", "cancel_requested"].includes(String(status).toLowerCase());
@@ -1561,6 +1679,7 @@ function panelHtml() {
           bot_username: q("#botUsername").value.trim(),
           start_payload: q("#startPayload").value.trim(),
           suite: q("#suite").value,
+          engine: q("#engine").value,
           selector: selectorOverride || q("#selector").value,
           max_drafts: q("#maxDrafts").value
         };
@@ -1622,7 +1741,7 @@ async function handlePanelPage() {
   return htmlResponse(panelHtml());
 }
 
-async function handlePanelRunCreate(env, request) {
+async function handlePanelRunCreate(env, request, ctx) {
   const authResponse = requirePanelAuthorization(env, request);
   if (authResponse) {
     return authResponse;
@@ -1641,13 +1760,18 @@ async function handlePanelRunCreate(env, request) {
   if (!["generated_scenarios", "discover_mtproto"].includes(suite)) {
     return jsonResponse({ error: "Панель поддерживает только generated_scenarios и discover_mtproto" }, 400);
   }
+  const engine = normalizePanelEngine(body.engine, suite);
+  if (engine === "cloudflare" && !isCloudflareNativeSuite(suite)) {
+    return jsonResponse({ error: "Cloudflare runner пока поддерживает только generated_scenarios и discover_mtproto" }, 400);
+  }
   const selector = suite === "generated_scenarios" ? String(body.selector || "smart").trim() || "smart" : "";
   const maxDrafts = clampNumber(body.max_drafts, 8, 1, 50);
   const activeRun = await findActivePanelRun(env, {
     botUsername,
     startPayload: body.start_payload,
     suite,
-    selector
+    selector,
+    engine
   });
   if (activeRun) {
     return jsonResponse({ run: activeRun, reused: true });
@@ -1663,6 +1787,7 @@ async function handlePanelRunCreate(env, request) {
       bot_username: `@${botUsername}`,
       start_payload: String(body.start_payload || "").trim(),
       suite,
+      engine,
       selector,
       max_drafts: maxDrafts,
       created_at: createdAt,
@@ -1671,6 +1796,25 @@ async function handlePanelRunCreate(env, request) {
     { phase: "создание", status: "queued", message: "Прогон создан из панели" }
   );
   await savePanelRun(env, run);
+
+  if (engine === "cloudflare") {
+    run = appendPanelEvent(
+      {
+        ...run,
+        status: "running",
+        updated_at: nowIso()
+      },
+      { phase: "cloudflare", status: "running", message: "Прогон запущен в Cloudflare без GitHub Actions" }
+    );
+    await savePanelRun(env, run);
+    const promise = runCloudflarePanelRun(env, panelRunId);
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(promise);
+      return jsonResponse({ run });
+    }
+    await promise;
+    return jsonResponse({ run: (await loadPanelRun(env, panelRunId)) || run });
+  }
 
   try {
     const dispatch = await dispatchGithubRun(env, {
@@ -1712,6 +1856,7 @@ async function handlePanelRunCreate(env, request) {
       {
         ...run,
         status: dispatch.status || "requested",
+        engine: "github",
         github_run_id: dispatch.runId || runIdFromUrl(dispatch.runUrl),
         github_run_url: dispatch.runUrl,
         updated_at: nowIso()
@@ -2037,7 +2182,7 @@ async function handleTelegramWebhook(env, request) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/panel") {
       return handlePanelPage(env, request);
@@ -2046,7 +2191,7 @@ export default {
       return handlePanelRunList(env, request);
     }
     if (url.pathname === "/api/runs" && request.method === "POST") {
-      return handlePanelRunCreate(env, request);
+      return handlePanelRunCreate(env, request, ctx);
     }
     const panelRunCancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
     if (panelRunCancelMatch && request.method === "POST") {
