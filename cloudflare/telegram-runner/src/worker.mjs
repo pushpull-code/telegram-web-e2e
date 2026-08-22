@@ -2068,6 +2068,18 @@ function panelHtml() {
       const defects = Array.isArray(review.defects) ? review.defects : [];
       const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
       const next = review.next_run || {};
+      const facts = review.coverage_facts || suite.coverage_facts || {};
+      const factLines = [
+        facts.selector ? "режим: " + uiLabel(facts.selector) : "",
+        Number.isFinite(Number(facts.reachedDepth)) || Number.isFinite(Number(facts.maxDepth))
+          ? "глубина: " + (facts.reachedDepth ?? "?") + "/" + (facts.maxDepth ?? "?")
+          : "",
+        Number.isFinite(Number(facts.nodeCount)) ? "узлов: " + facts.nodeCount : "",
+        Number.isFinite(Number(facts.commandSeedsExploredCount)) ? "команды меню: " + facts.commandSeedsExploredCount : "",
+        typeof facts.countryChangeCovered === "boolean" ? "смена страны: " + (facts.countryChangeCovered ? "найдена" : "не найдена") : "",
+        Number.isFinite(Number(facts.telegramClicks)) ? "Telegram кликов: " + facts.telegramClicks : "",
+        Number.isFinite(Number(facts.webappScreenshots)) ? "WebApp скриншотов: " + facts.webappScreenshots : ""
+      ].filter(Boolean);
       const webapps = Array.isArray(suite.webapp_handoffs) ? suite.webapp_handoffs : [];
       const webappHtml = webapps.length ? webapps.map((handoff) => {
         const browser = handoff.browser_run || {};
@@ -2099,6 +2111,7 @@ function panelHtml() {
         ].filter(Boolean).join("\\n")) + '</pre></div>' +
         '<div class="item"><b>Общий взгляд</b><p>' + escapeHtml(overview.summary || "AI-разбора пока нет.") + '</p>' +
         '<div class="muted">' + escapeHtml(overview.business_purpose || overview.product_purpose || "") + '</div></div>' +
+        '<div class="item"><b>Факты покрытия</b><pre>' + escapeHtml(factLines.join("\\n") || "Факты покрытия пока не сохранены.") + '</pre></div>' +
         '<div class="item"><b>Дефекты</b>' + (defects.length ? defects.map((item) => {
           return '<div class="item">' + pill(item.severity || "unknown", statusKind(item.severity)) +
             '<b>' + escapeHtml(item.title || "") + '</b><div class="muted">' + escapeHtml((item.evidence || []).join(" | ")) +
