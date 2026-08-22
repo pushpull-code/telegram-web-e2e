@@ -616,35 +616,49 @@ function mtprotoConfig(env) {
 async function mtprotoRequest(env, path, body) {
   const config = mtprotoConfig(env);
   const timeoutMs = clampNumber(env.MTPROTO_SERVICE_REQUEST_TIMEOUT_MS, 20000, 3000, 120000);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const maxAttempts = clampNumber(env.MTPROTO_SERVICE_RETRY_ATTEMPTS, 3, 1, 6);
+  let lastError = "";
 
-  let response;
-  try {
-    response = await fetch(`${config.url}${path}`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${config.token}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
-  } catch (error) {
-    throw new Error(
-      error instanceof Error && error.name === "AbortError"
-        ? `MTProto ${path} timed out after ${timeoutMs}ms`
-        : `MTProto ${path} request failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  } finally {
-    clearTimeout(timeout);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${config.url}${path}`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${config.token}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok && payload?.success !== false) {
+        return payload;
+      }
+      const errorText = `MTProto ${path} failed: ${response.status} ${JSON.stringify(payload)}`;
+      const retryable = response.status >= 500 || /send_failed|timeout|temporar|flood|rate/i.test(JSON.stringify(payload));
+      if (!retryable || attempt >= maxAttempts) {
+        throw new Error(errorText);
+      }
+      lastError = errorText;
+    } catch (error) {
+      const retryable = error instanceof Error && (error.name === "AbortError" || /fetch|network|timeout|send_failed/i.test(error.message));
+      lastError =
+        error instanceof Error && error.name === "AbortError"
+          ? `MTProto ${path} timed out after ${timeoutMs}ms`
+          : `MTProto ${path} request failed: ${error instanceof Error ? error.message : String(error)}`;
+      if (!retryable || attempt >= maxAttempts) {
+        throw new Error(lastError);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    await sleep(Math.min(5000, 500 * attempt * attempt));
   }
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.success === false) {
-    throw new Error(`MTProto ${path} failed: ${response.status} ${JSON.stringify(payload)}`);
-  }
-  return payload;
+  throw new Error(lastError || `MTProto ${path} failed`);
 }
 
 function peerForRun(run) {
