@@ -2193,6 +2193,9 @@ function normalizeAiReviewResult(review, map, suite) {
 }
 
 function fallbackAiReview(map, suite, aiMeta = {}) {
+  if (suite?.target_type === "website" || suite?.runner === "cloudflare-website") {
+    return fallbackWebsiteReview(map, suite, aiMeta);
+  }
   const branchReviews = (suite.drafts || []).map((draft) => {
     const node = map.nodes.find((item) => item.id === draft.node_id);
     const analysis = node ? classifyNode(node) : classifyNode({ path: draft.path || [], tail: [], buttons: [], skippedButtons: [] });
@@ -2260,6 +2263,69 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
   }, map, suite);
 }
 
+function fallbackWebsiteReview(map, suite, aiMeta = {}) {
+  const audit = suite.website_audit || {};
+  const blockerTexts = [
+    ...(Array.isArray(audit.errors_or_blockers) ? audit.errors_or_blockers : []),
+    !audit.ok ? audit.json_error || audit.screenshot_error || "" : ""
+  ].filter(Boolean);
+  const defects = blockerTexts
+    .map((item) => ({
+        title: compactText(item, 120),
+        evidence: [audit.final_url || suite.target_url || ""].filter(Boolean),
+        severity: "medium"
+      }));
+  return normalizeAiReviewResult(
+    {
+      overview: {
+        summary: audit.visible_text_summary || `Browser Run открыл ${suite.target_url || map.target_url || "сайт"}.`,
+        business_purpose: audit.business_purpose || "Определяется по видимым экранам сайта и действиям.",
+        main_flows: Array.isArray(audit.main_flows) ? audit.main_flows.slice(0, 8) : [],
+        risks: blockerTexts.slice(0, 8),
+        next_steps: Array.isArray(audit.next_steps) && audit.next_steps.length
+          ? audit.next_steps.slice(0, 8)
+          : ["Добавить конкретный сценарий и тестовый аккаунт для более глубокого прохода."]
+      },
+      flow_map: (Array.isArray(audit.visited_pages) && audit.visited_pages.length ? audit.visited_pages : [{
+        title: audit.title || "Стартовая страница",
+        purpose: audit.visible_text_summary || "",
+        main_actions: audit.main_actions || []
+      }]).map((page, index) => ({
+        name: page.title || `Экран ${index + 1}`,
+        purpose: page.purpose || page.summary || audit.visible_text_summary || "",
+        criticality: index === 0 ? "high" : "medium",
+        branches: Array.isArray(page.main_actions) ? page.main_actions : Array.isArray(audit.main_actions) ? audit.main_actions : []
+      })),
+      branch_reviews: (suite.drafts || []).map((draft) => ({
+        draft_id: draft.id,
+        node_id: draft.node_id,
+        path: draft.path || [],
+        intended_behavior: draft.scenario || "Проверить сайт как пользователь.",
+        observed_behavior: audit.visible_text_summary || audit.auth_status || "Browser Run выполнил обзор сайта.",
+        defects: blockerTexts,
+        severity: defects.length ? "medium" : "low",
+        missing_evidence: audit.auth_configured && !audit.authenticated ? ["Авторизация не подтверждена Browser Run."] : []
+      })),
+      defects,
+      coverage_gaps: audit.auth_configured && !audit.authenticated ? ["Нужно подтвердить авторизацию тестовым аккаунтом."] : [],
+      next_run: {
+        recommended_depth: 2,
+        recommended_max_nodes: 8,
+        focus_branches: ["website-overview"],
+        engine: "cloudflare-browser-run"
+      },
+      ai: {
+        enabled: false,
+        provider: aiMeta.provider || "fallback",
+        model: aiMeta.model || "heuristic",
+        error: aiMeta.error || ""
+      }
+    },
+    map,
+    suite
+  );
+}
+
 function countryPreflightFailureReason(preflight) {
   if (!preflight) {
     return "Country/device preflight did not run.";
@@ -2292,6 +2358,373 @@ function countryPreflightFailureReason(preflight) {
     return "Device-check link was not found while /join_task is blocked.";
   }
   return "Country/device preflight did not confirm access to tasks.";
+}
+
+function normalizeWebsiteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return "";
+    }
+    url.hash = "";
+    return url.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
+function websiteAuditSchema() {
+  return {
+    type: "json_schema",
+    json_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        current_url: { type: "string" },
+        business_purpose: { type: "string" },
+        authenticated: { type: "boolean" },
+        auth_status: { type: "string" },
+        visible_text_summary: { type: "string" },
+        main_flows: { type: "array", items: { type: "string" } },
+        main_actions: { type: "array", items: { type: "string" } },
+        forms: { type: "array", items: { type: "string" } },
+        visited_pages: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              purpose: { type: "string" },
+              main_actions: { type: "array", items: { type: "string" } },
+              issues: { type: "array", items: { type: "string" } }
+            },
+            required: ["title", "url", "purpose", "main_actions", "issues"]
+          }
+        },
+        errors_or_blockers: { type: "array", items: { type: "string" } },
+        qa_notes: { type: "array", items: { type: "string" } },
+        coverage_gaps: { type: "array", items: { type: "string" } },
+        next_steps: { type: "array", items: { type: "string" } }
+      },
+      required: [
+        "title",
+        "current_url",
+        "business_purpose",
+        "authenticated",
+        "auth_status",
+        "visible_text_summary",
+        "main_flows",
+        "main_actions",
+        "forms",
+        "visited_pages",
+        "errors_or_blockers",
+        "qa_notes",
+        "coverage_gaps",
+        "next_steps"
+      ]
+    }
+  };
+}
+
+function buildWebsiteMap(run, audit) {
+  const targetUrl = normalizeWebsiteUrl(run.target_url);
+  const pages = Array.isArray(audit.visited_pages) && audit.visited_pages.length
+    ? audit.visited_pages
+    : [
+        {
+          title: audit.title || "Стартовая страница",
+          url: audit.final_url || targetUrl,
+          purpose: audit.visible_text_summary || "",
+          main_actions: audit.main_actions || [],
+          issues: audit.errors_or_blockers || []
+        }
+      ];
+  const nodes = pages.map((page, index) => ({
+    id: index === 0 ? "website-root" : `website-page-${index + 1}`,
+    depth: index,
+    path: [targetUrl, page.title || `Экран ${index + 1}`].filter(Boolean),
+    stateType: "website_page",
+    messageWindow: {
+      activeCount: 1,
+      totalCount: pages.length
+    },
+    tail: [
+      {
+        id: index + 1,
+        outgoing: false,
+        text: compactText(page.purpose || audit.visible_text_summary || "", 500)
+      }
+    ],
+    buttons: (Array.isArray(page.main_actions) ? page.main_actions : []).map((action) => ({
+      text: compactText(action, 120),
+      type: "website_action",
+      clickable: false
+    })),
+    skippedButtons: (Array.isArray(page.issues) ? page.issues : []).map((issue) => ({
+      text: compactText(issue, 120),
+      type: "website_issue",
+      clickable: false,
+      skipReason: "reported_issue"
+    })),
+    url: page.url || audit.final_url || targetUrl
+  }));
+  return {
+    bot: "",
+    target_type: "website",
+    target_url: targetUrl,
+    generated_at: nowIso(),
+    runner: "cloudflare-browser",
+    limits: {
+      maxDepth: Math.max(1, nodes.length - 1),
+      maxNodes: nodes.length,
+      commands: []
+    },
+    nodes,
+    edges: nodes.slice(1).map((node, index) => ({
+      from: index === 0 ? "website-root" : `website-page-${index + 1}`,
+      to: node.id,
+      label: "browser navigation"
+    }))
+  };
+}
+
+function buildWebsiteSuite(run, audit, map) {
+  const technicalError = !audit.ok ? audit.json_error || audit.screenshot_error || "Browser Run не смог проверить сайт." : "";
+  const blockers = [
+    ...(Array.isArray(audit.errors_or_blockers) ? audit.errors_or_blockers.filter(Boolean) : []),
+    technicalError
+  ].filter(Boolean);
+  const screenshotName = audit.screenshot?.artifact_name || "";
+  return {
+    runner: "cloudflare-website",
+    target_type: "website",
+    target_url: normalizeWebsiteUrl(run.target_url),
+    report_file: "website-audit-report.json",
+    source_artifacts: ["website-audit-report.json", "website-ai-review.json", ...(screenshotName ? [screenshotName] : [])],
+    summary: {
+      total: 1,
+      passed: blockers.length ? 0 : 1,
+      failed: blockers.length ? 1 : 0,
+      warning: audit.auth_configured && !audit.authenticated ? 1 : 0,
+      flaky: 0,
+      notRun: 0
+    },
+    coverage: {
+      discovered: map.nodes.length,
+      selected: 1,
+      manual: 0,
+      runnableTestAccount: audit.auth_configured ? 1 : 0,
+      limitedOut: 0,
+      websitePages: map.nodes.length,
+      websiteScreenshots: screenshotName ? 1 : 0,
+      authConfigured: audit.auth_configured ? 1 : 0,
+      authConfirmed: audit.authenticated ? 1 : 0
+    },
+    coverage_facts: {
+      targetType: "website",
+      targetUrl: normalizeWebsiteUrl(run.target_url),
+      websiteAudited: Boolean(audit.ok),
+      websitePages: map.nodes.length,
+      websiteScreenshots: screenshotName ? 1 : 0,
+      authConfigured: Boolean(audit.auth_configured),
+      authenticated: Boolean(audit.authenticated),
+      authStatus: audit.auth_status || "",
+      browserJsonOk: Boolean(audit.result),
+      browserScreenshotOk: Boolean(audit.screenshot?.ok)
+    },
+    selector: "website",
+    selected_ids: ["website-overview"],
+    missing_selected_ids: [],
+    website_audit: audit,
+    webapp_handoffs: [],
+    followed_actions: [
+      {
+        type: "browser_website_audit",
+        status: audit.ok ? "success" : "failure",
+        url: normalizeWebsiteUrl(run.target_url),
+        screenshot: screenshotName,
+        error: audit.json_error || audit.screenshot_error || ""
+      }
+    ],
+    draft_count: 1,
+    drafts: [
+      {
+        id: "website-overview",
+        status: blockers.length ? "failed" : "passed",
+        scenario: run.test_objective || "Обзор сайта и основных пользовательских сценариев",
+        source_type: "cloudflare-browser",
+        ai_severity: blockers.length ? "medium" : "low",
+        first_error: blockers[0] || "",
+        step_count: 1,
+        passed_steps: blockers.length ? 0 : 1,
+        warning_steps: audit.auth_configured && !audit.authenticated ? 1 : 0,
+        failed_steps: blockers.length ? 1 : 0,
+        attempts: 1,
+        node_id: "website-root",
+        path: [normalizeWebsiteUrl(run.target_url)],
+        safety: "browser-readonly",
+        reason: "Browser Run открыл сайт, попробовал выполнить безопасный обзор и вернул QA-карту."
+      }
+    ],
+    bot_map: map
+  };
+}
+
+async function executeWebsiteAuditRun(env, run, options = {}) {
+  const startedAt = Date.now();
+  const shouldStop = typeof options.shouldStop === "function" ? options.shouldStop : async () => false;
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  const targetUrl = normalizeWebsiteUrl(run.target_url);
+  if (!targetUrl) {
+    return {
+      status: "failure",
+      error: "Некорректный URL сайта или веб-приложения.",
+      completed_at: nowIso(),
+      duration_sec: Math.round((Date.now() - startedAt) / 1000),
+      cloudflare_run: {
+        runner: "cloudflare-website",
+        ai_enabled: false
+      }
+    };
+  }
+
+  await notifyProgress(onProgress, {
+    phase: "website_audit_phase",
+    message: `Открываю сайт: ${compactText(targetUrl, 120)}`
+  });
+
+  const authInstructions = String(run.auth_instructions || "").trim();
+  const objective = String(run.test_objective || "").trim() || "Провести общий QA-обзор сайта, навигации, форм, авторизации и очевидных ошибок.";
+  const audit = {
+    enabled: Boolean(env.BROWSER),
+    ok: false,
+    target_url: targetUrl,
+    final_url: targetUrl,
+    auth_configured: Boolean(authInstructions),
+    auth_instructions_used: Boolean(authInstructions)
+  };
+
+  if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
+    audit.json_error = "BROWSER binding is not configured.";
+  } else if (await shouldStop()) {
+    return {
+      status: "cancelled",
+      completed_at: nowIso(),
+      duration_sec: Math.round((Date.now() - startedAt) / 1000),
+      cloudflare_run: {
+        runner: "cloudflare-website",
+        cancelled: true
+      }
+    };
+  } else {
+    try {
+      const response = await env.BROWSER.quickAction("json", {
+        url: targetUrl,
+        prompt: [
+          "Ты QA-инженер. Открой сайт или веб-приложение и сделай безопасный обзор пользовательских сценариев.",
+          `Цель проверки: ${objective}`,
+          authInstructions
+            ? `Инструкции авторизации для тестового аккаунта: ${authInstructions}`
+            : "Если сайт требует авторизацию, опиши это как blocker и не выдумывай учетные данные.",
+          "Можно переходить по навигации, открывать меню, вкладки, формы и неопасные действия.",
+          "Нельзя выполнять оплату, вывод денег, удаление данных, отправку продовых форм, покупку или необратимые действия.",
+          "Не возвращай пароли, токены и другие секреты из инструкций. Верни только факт авторизации и QA-наблюдения.",
+          "Верни краткий JSON: назначение, авторизация, основные flow, посещенные страницы, формы, блокеры, визуальные/логические проблемы и следующий шаг."
+        ].join(" "),
+        response_format: websiteAuditSchema(),
+        gotoOptions: {
+          waitUntil: "networkidle2",
+          timeout: 45000
+        }
+      });
+      const payload = await response
+        .clone()
+        .json()
+        .catch(async () => ({ raw: compactText(await response.text().catch(() => ""), 500) }));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(`Browser Run json failed: ${response.status} ${JSON.stringify(payload).slice(0, 700)}`);
+      }
+      const result = payload?.result || payload;
+      audit.result = result;
+      audit.title = compactText(result.title || "", 180);
+      audit.final_url = normalizeWebsiteUrl(result.current_url) || targetUrl;
+      audit.business_purpose = compactText(result.business_purpose || "", 500);
+      audit.authenticated = Boolean(result.authenticated);
+      audit.auth_status = compactText(result.auth_status || "", 260);
+      audit.visible_text_summary = compactText(result.visible_text_summary || "", 700);
+      audit.main_flows = Array.isArray(result.main_flows) ? result.main_flows.map((item) => compactText(item, 160)).slice(0, 12) : [];
+      audit.main_actions = Array.isArray(result.main_actions) ? result.main_actions.map((item) => compactText(item, 160)).slice(0, 16) : [];
+      audit.forms = Array.isArray(result.forms) ? result.forms.map((item) => compactText(item, 160)).slice(0, 12) : [];
+      audit.visited_pages = Array.isArray(result.visited_pages) ? result.visited_pages.slice(0, 12) : [];
+      audit.errors_or_blockers = Array.isArray(result.errors_or_blockers)
+        ? result.errors_or_blockers.map((item) => compactText(item, 180)).slice(0, 12)
+        : [];
+      audit.qa_notes = Array.isArray(result.qa_notes) ? result.qa_notes.map((item) => compactText(item, 180)).slice(0, 12) : [];
+      audit.coverage_gaps = Array.isArray(result.coverage_gaps) ? result.coverage_gaps.map((item) => compactText(item, 180)).slice(0, 12) : [];
+      audit.next_steps = Array.isArray(result.next_steps) ? result.next_steps.map((item) => compactText(item, 180)).slice(0, 12) : [];
+      audit.json_browser_ms_used = response.headers.get("X-Browser-Ms-Used") || "";
+    } catch (error) {
+      audit.json_error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  await notifyProgress(onProgress, {
+    phase: "website_audit_phase",
+    message: "Сохраняю скриншот стартовой страницы"
+  });
+  try {
+    audit.screenshot = await captureUrlScreenshot(env, run, "website-homepage.png", targetUrl, {
+      kind: "website-screenshot",
+      buttonText: compactText(targetUrl, 80)
+    });
+  } catch (error) {
+    audit.screenshot_error = error instanceof Error ? error.message : String(error);
+  }
+
+  audit.ok = Boolean(audit.result || audit.screenshot?.ok);
+  const map = buildWebsiteMap(run, audit);
+  const generatedSuite = buildWebsiteSuite(run, audit, map);
+
+  await notifyProgress(onProgress, {
+    phase: "ai",
+    message: "Отправляю web-аудит в AI-разбор"
+  });
+  const generatedSuiteAiReview = await aiReview(env, map, generatedSuite);
+  const failed = Number(generatedSuite.summary.failed) > 0 || !audit.ok;
+
+  await notifyProgress(onProgress, {
+    phase: "finish",
+    status: failed ? "failure" : "success",
+    message: failed ? "Web-аудит завершён, есть блокеры" : "Web-аудит завершён"
+  });
+
+  return {
+    status: failed ? "failure" : "success",
+    error: !audit.ok ? audit.json_error || audit.screenshot_error || "Browser Run не смог проверить сайт." : "",
+    completed_at: nowIso(),
+    duration_sec: Math.round((Date.now() - startedAt) / 1000),
+    bot_map: map,
+    generated_suite: generatedSuite,
+    generated_suite_ai_review: generatedSuiteAiReview,
+    screenshot_count: audit.screenshot?.ok ? 1 : 0,
+    cloudflare_run: {
+      runner: "cloudflare-website",
+      target_url: targetUrl,
+      node_count: map.nodes.length,
+      edge_count: map.edges.length,
+      website_screenshot_count: audit.screenshot?.ok ? 1 : 0,
+      auth_configured: Boolean(authInstructions),
+      auth_confirmed: Boolean(audit.authenticated),
+      ai_enabled: Boolean(generatedSuiteAiReview?.ai?.enabled),
+      ai_model: generatedSuiteAiReview?.ai?.model || ""
+    }
+  };
 }
 
 function buildCountryPreflightBlockedResult(run, preflight, startedAt) {
@@ -2488,6 +2921,7 @@ async function aiReview(env, map, suite) {
   const apiKey = String(env.AI_API_KEY || "").trim();
   const baseUrl = String(env.AI_BASE_URL || "https://api.openai.com/v1").trim().replace(/\/+$/, "");
   const model = String(env.AI_MODEL || "gpt-4.1-mini").trim();
+  const isWebsiteSuite = suite?.target_type === "website" || suite?.runner === "cloudflare-website";
   if (!apiKey) {
     return fallbackAiReview(map, suite, { error: "AI_API_KEY is not configured in Cloudflare Worker.", model });
   }
@@ -2502,12 +2936,18 @@ async function aiReview(env, map, suite) {
         role: "system",
         content:
           [
-            "You are a senior QA analyst for Telegram bots.",
+            isWebsiteSuite
+              ? "You are a senior QA analyst for websites and web applications."
+              : "You are a senior QA analyst for Telegram bots.",
             "Return only valid compact json. Do not include markdown, prose, code fences, or comments.",
             "Keep each string under 180 characters, arrays under 5 items, and avoid long paragraphs.",
+            isWebsiteSuite
+              ? "Use website_audit as evidence for pages, auth status, visible UX, forms, blockers, and screenshots."
+              : "Use Telegram map nodes, messages, buttons, country preflight, and WebApp handoffs as evidence.",
             "Use webapp_handoffs as evidence for URL/WebApp branches. If Browser Run could not inspect a handoff, mark it as missing evidence.",
             "Use followed_actions as evidence of what the QA runner actually clicked/opened. Distinguish Telegram button click from Browser-only WebApp inspection.",
             "Use country_device_preflight as evidence for selected country, IP country, device-check link, and whether /join_task became unblocked.",
+            "Do not reveal credentials, passwords, tokens, cookies, or auth instructions in the output.",
             "Use coverage_facts as truth. Do not list gaps contradicted by coverage_facts.",
             "Do not say country change was untested when coverage_facts.countryChangeCovered is true.",
             "Do not say country/device verification is untested when coverage_facts.countryDevicePreflightStatus is success.",
@@ -2519,7 +2959,7 @@ async function aiReview(env, map, suite) {
       },
       {
         role: "user",
-        content: `Return valid json for this Telegram bot audit payload:\n${JSON.stringify(
+        content: `Return valid json for this ${isWebsiteSuite ? "website/web-app" : "Telegram bot"} audit payload:\n${JSON.stringify(
           {
             outputSchema: {
               overview: {
@@ -2553,9 +2993,12 @@ async function aiReview(env, map, suite) {
             },
             botMap: map,
             generatedSuite: {
+              target_type: suite.target_type,
+              target_url: suite.target_url,
               summary: suite.summary,
               coverage: suite.coverage,
               coverage_facts: suite.coverage_facts,
+              website_audit: suite.website_audit,
               country_device_preflight: suite.country_device_preflight,
               webapp_handoffs: suite.webapp_handoffs,
               followed_actions: suite.followed_actions,
@@ -2620,10 +3063,13 @@ async function aiReview(env, map, suite) {
 }
 
 export function isCloudflareNativeSuite(suite) {
-  return ["discover_mtproto", "generated_scenarios"].includes(String(suite || "").trim());
+  return ["discover_mtproto", "generated_scenarios", "website_audit"].includes(String(suite || "").trim());
 }
 
 export async function executeCloudflareNativeRun(env, run, options = {}) {
+  if (String(run?.suite || "").trim() === "website_audit" || run?.target_type === "website") {
+    return executeWebsiteAuditRun(env, run, options);
+  }
   const startedAt = Date.now();
   const shouldStop = typeof options.shouldStop === "function" ? options.shouldStop : async () => false;
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;

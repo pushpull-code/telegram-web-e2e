@@ -9,7 +9,7 @@ Cloudflare Worker for Telegram bot orchestration:
 - receives completion callback and sends report to Telegram with duration, scenario, run link, screenshots
 - asks user if a new test should be started
 - accepts direct commands like `/run generated_scenarios safe`
-- serves `/panel` web UI for bot username based QA runs
+- serves `/panel` web UI for Telegram bot and website/web-app QA runs
 
 ## 1) Create KV namespace
 
@@ -106,6 +106,8 @@ https://<worker-url>/panel
 
 - запускать GitHub Actions прогон по username бота и опциональному `/start` payload;
 - запускать Cloudflare MTProto прогон без расхода GitHub Actions minutes;
+- запускать Cloudflare Browser прогон обычного сайта или веб-приложения по URL;
+- передавать одноразовые инструкции авторизации для тестового аккаунта в Browser runner без показа их в панели после сохранения;
 - держать Cloudflare-прогоны в Workflows, чтобы долгие карты/AI-разборы не зависели от `waitUntil`;
 - показывать live-прогресс GitHub jobs/steps;
 - показывать документы, которые создаются во время прогона;
@@ -124,6 +126,16 @@ max drafts: 8
 Для отдельного dev/test бота используй selector `dev`: он разрешает более глубокий проход и state-changing ветки согласно safety-настройкам workflow.
 
 Cloudflare engine создаёт `PANEL_RUN_WORKFLOW`, выполняет MTProto discovery, строит карту веток, генерирует короткий AI/fallback-разбор и сохраняет результат в KV без создания GitHub Actions run. GitHub Actions engine нужен для полного Playwright-прогона со скриншотами/trace и тяжелыми WebApp-проверками, пока они не вынесены в Cloudflare Browser Run/Containers.
+
+Для сайта или веб-приложения выбери в панели `Сайт или веб-приложение`, укажи URL, цель проверки и, если нужно, тестовые инструкции авторизации. Пример:
+
+```text
+URL: https://rate2cash.com
+Что проверить: авторизация, главный экран, меню, задачи, пополнение, ошибки форм.
+Авторизация: войти тестовым аккаунтом; не делать оплату, вывод средств и необратимые действия.
+```
+
+Режим сайта использует `suite: website_audit` и Cloudflare Browser. Он сохраняет `website-audit-report.json`, `website-ai-review.json`, screenshot стартовой страницы и показывает статус авторизации, найденные flow, формы, блокеры и рекомендации.
 
 ## Telegram commands
 

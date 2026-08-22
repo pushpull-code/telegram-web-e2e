@@ -15,6 +15,7 @@ const REQUIRED_SUITES = new Set([
   "autorun",
   "freelancer",
   "settings",
+  "website_audit",
   "all"
 ]);
 const GENERATED_SELECTOR_SUITES = new Set(["generated_scenario", "generated_scenarios"]);
@@ -122,6 +123,14 @@ function normalizePanelEngine(value, suite) {
   return isCloudflareNativeSuite(suite) ? "cloudflare" : "github";
 }
 
+function normalizePanelTargetType(value, suite) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["website", "web", "site", "webapp", "app"].includes(normalized) || suite === "website_audit") {
+    return "website";
+  }
+  return "telegram_bot";
+}
+
 function stripCommandMention(text) {
   return String(text || "").trim().replace(/^(\/\w+)@\w+/i, "$1");
 }
@@ -213,6 +222,41 @@ function normalizeBotUsername(value) {
   return /^[A-Za-z0-9_]{5,64}$/.test(normalized) ? normalized : "";
 }
 
+function normalizeWebsiteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return "";
+    }
+    url.hash = "";
+    return url.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
+function compactPanelText(value, maxLength = 2000) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
+}
+
+function sanitizePanelRunForStorage(run) {
+  if (!run || typeof run !== "object") {
+    return run;
+  }
+  const sanitized = { ...run };
+  delete sanitized.auth_instructions;
+  delete sanitized.auth_secret;
+  delete sanitized.password;
+  delete sanitized.token;
+  return sanitized;
+}
+
 function clampNumber(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -262,7 +306,7 @@ async function savePanelRun(env, run) {
   if (!env.BOT_STATE_KV || !run?.id) {
     return;
   }
-  await env.BOT_STATE_KV.put(panelRunKey(run.id), JSON.stringify(run), {
+  await env.BOT_STATE_KV.put(panelRunKey(run.id), JSON.stringify(sanitizePanelRunForStorage(run)), {
     expirationTtl: PANEL_RUN_TTL_SECONDS
   });
 }
@@ -311,7 +355,26 @@ function isActivePanelRun(run) {
   return true;
 }
 
+function cloudflareRunnerTitle(run) {
+  return normalizePanelTargetType(run?.target_type, run?.suite) === "website"
+    ? "Cloudflare Browser runner"
+    : "Cloudflare MTProto runner";
+}
+
 function samePanelRunRequest(run, criteria) {
+  const runTargetType = normalizePanelTargetType(run?.target_type, run?.suite);
+  const criteriaTargetType = normalizePanelTargetType(criteria?.targetType, criteria?.suite);
+  if (runTargetType !== criteriaTargetType) {
+    return false;
+  }
+  if (runTargetType === "website") {
+    return (
+      normalizeWebsiteUrl(run?.target_url) === normalizeWebsiteUrl(criteria?.targetUrl) &&
+      String(run?.test_objective || "").trim() === String(criteria?.testObjective || "").trim() &&
+      String(run?.suite || "").trim() === String(criteria?.suite || "").trim() &&
+      normalizePanelEngine(run?.engine, run?.suite) === normalizePanelEngine(criteria?.engine, criteria?.suite)
+    );
+  }
   const sameBase =
     normalizeBotUsername(run?.bot_username) === normalizeBotUsername(criteria?.botUsername) &&
     String(run?.start_payload || "").trim() === String(criteria?.startPayload || "").trim() &&
@@ -1270,11 +1333,11 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
       cloudflare_progress: {
         phase: "start",
         status: "running",
-        message: "Cloudflare MTProto runner начал прогон"
+        message: `${cloudflareRunnerTitle(run)} начал прогон`
       },
       updated_at: nowIso()
     },
-    { phase: "cloudflare", status: "running", message: "Cloudflare MTProto runner начал прогон" }
+    { phase: "cloudflare", status: "running", message: `${cloudflareRunnerTitle(run)} начал прогон` }
   );
   await savePanelRun(env, run);
 
@@ -1344,10 +1407,10 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
           status: result.status || "success",
           message:
             result.status === "success"
-              ? "Cloudflare MTProto runner завершил прогон"
+              ? `${cloudflareRunnerTitle(latest)} завершил прогон`
               : result.status === "cancelled"
-                ? "Cloudflare MTProto runner отменён"
-                : "Cloudflare MTProto runner завершился с ошибкой"
+                ? `${cloudflareRunnerTitle(latest)} отменён`
+                : `${cloudflareRunnerTitle(latest)} завершился с ошибкой`
         },
         updated_at: nowIso()
       },
@@ -1356,10 +1419,10 @@ async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
         status: result.status || "success",
         message:
           result.status === "success"
-            ? "Cloudflare MTProto runner завершил прогон"
+            ? `${cloudflareRunnerTitle(latest)} завершил прогон`
             : result.status === "cancelled"
-              ? "Cloudflare MTProto runner отменён"
-              : "Cloudflare MTProto runner завершился с ошибкой"
+              ? `${cloudflareRunnerTitle(latest)} отменён`
+              : `${cloudflareRunnerTitle(latest)} завершился с ошибкой`
       }
     );
     await savePanelRun(env, next);
@@ -1450,7 +1513,7 @@ function panelHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Панель QA Telegram-ботов</title>
+  <title>Панель QA автотестов</title>
   <style>
     :root {
       color-scheme: light;
@@ -1485,7 +1548,7 @@ function panelHtml() {
     h1 { margin: 0 0 18px; font-size: 20px; font-weight: 750; letter-spacing: 0; }
     h2 { margin: 0 0 12px; font-size: 16px; font-weight: 700; letter-spacing: 0; }
     label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
-    input, select, button {
+    input, select, textarea, button {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -1494,6 +1557,7 @@ function panelHtml() {
       background: #fff;
       color: var(--ink);
     }
+    textarea { min-height: 86px; resize: vertical; }
     button {
       cursor: pointer;
       font-weight: 700;
@@ -1507,6 +1571,7 @@ function panelHtml() {
     button.inline { width: auto; min-width: 108px; padding: 8px 10px; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row > * { min-width: 0; }
+    .field-note { margin-top: 5px; font-size: 12px; color: var(--muted); }
     .topbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     .top-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 16px; }
@@ -1617,17 +1682,34 @@ function panelHtml() {
 <body>
   <div class="shell">
     <aside>
-      <h1>Панель QA Telegram-ботов</h1>
-      <label for="botUsername">Username бота</label>
-      <input id="botUsername" autocomplete="off" placeholder="@example_bot">
-      <label for="startPayload">Payload для /start</label>
-      <input id="startPayload" autocomplete="off" placeholder="необязательно">
+      <h1>Панель QA автотестов</h1>
+      <label for="targetType">Что тестируем</label>
+      <select id="targetType">
+        <option value="telegram_bot">Telegram-бот</option>
+        <option value="website">Сайт или веб-приложение</option>
+      </select>
+      <div id="telegramFields">
+        <label for="botUsername">Username бота</label>
+        <input id="botUsername" autocomplete="off" placeholder="@example_bot">
+        <label for="startPayload">Payload для /start</label>
+        <input id="startPayload" autocomplete="off" placeholder="необязательно">
+      </div>
+      <div id="websiteFields" hidden>
+        <label for="targetUrl">URL сайта / приложения</label>
+        <input id="targetUrl" autocomplete="off" placeholder="https://rate2cash.com">
+        <label for="testObjective">Что проверить</label>
+        <textarea id="testObjective" placeholder="Например: пройти авторизацию, проверить главный экран, меню, задачи, пополнение, ошибки в формах."></textarea>
+        <label for="authInstructions">Авторизация / тестовый аккаунт</label>
+        <textarea id="authInstructions" placeholder="Необязательно. Пиши только тестовые данные: как войти, какой аккаунт использовать, что нельзя менять."></textarea>
+        <div class="field-note">Инструкции авторизации передаются runner-у на время запуска и не показываются в панели после сохранения.</div>
+      </div>
       <div class="row">
         <div style="flex:1">
           <label for="suite">Режим</label>
           <select id="suite">
             <option value="generated_scenarios">Карта + AI + тест веток</option>
             <option value="discover_mtproto">Только карта</option>
+            <option value="website_audit">Сайт: обзор + авторизация + AI</option>
           </select>
         </div>
         <div style="width:120px">
@@ -1637,7 +1719,7 @@ function panelHtml() {
       </div>
       <label for="engine">Движок</label>
       <select id="engine">
-        <option value="cloudflare">Cloudflare MTProto</option>
+        <option value="cloudflare">Cloudflare</option>
         <option value="github">GitHub Actions</option>
       </select>
       <label for="selector">Выбор веток</label>
@@ -1736,12 +1818,16 @@ function panelHtml() {
       const labels = {
         generated_scenarios: "карта + AI + тест веток",
         discover_mtproto: "только карта",
+        website_audit: "сайт: обзор + авторизация + AI",
+        website: "сайт",
+        telegram_bot: "Telegram-бот",
         cloudflare: "Cloudflare",
         github: "GitHub Actions",
         start: "старт",
         discovery: "карта Telegram",
         suite: "ветки",
         webapp: "WebApp/URL",
+        website_audit_phase: "сайт",
         ai: "AI-разбор",
         finish: "финал",
         complete: "завершён",
@@ -1873,6 +1959,29 @@ function panelHtml() {
       selectedButton.textContent = isBusy ? "Запускаю..." : "Запустить выбранное";
     }
 
+    function isWebsiteTarget() {
+      return q("#targetType").value === "website";
+    }
+
+    function toggleTargetFields() {
+      const website = isWebsiteTarget();
+      q("#telegramFields").hidden = website;
+      q("#websiteFields").hidden = !website;
+      q("#runSelected").hidden = website;
+      if (website) {
+        q("#suite").value = "website_audit";
+        q("#engine").value = "cloudflare";
+        q("#selector").disabled = true;
+        q("#maxDrafts").disabled = true;
+        q("#engine").disabled = true;
+      } else {
+        if (q("#suite").value === "website_audit") q("#suite").value = "generated_scenarios";
+        q("#selector").disabled = false;
+        q("#maxDrafts").disabled = false;
+        q("#engine").disabled = false;
+      }
+    }
+
     function setCancelBusy(isBusy) {
       state.cancelling = isBusy;
       const button = q("#cancelRun");
@@ -1884,7 +1993,8 @@ function panelHtml() {
       const payload = await api("/api/runs");
       const runs = payload.runs || [];
       q("#runList").innerHTML = runs.length ? runs.map((run) => {
-        return '<div class="run-row"><div><b>' + escapeHtml(run.bot_username || run.id) + '</b><div class="muted mono">' +
+        const targetLabel = run.target_url || run.bot_username || run.id;
+        return '<div class="run-row"><div><b>' + escapeHtml(targetLabel) + '</b><div class="muted mono">' +
           escapeHtml(uiLabel(run.status || "queued") + " · " + uiLabel(run.engine || "cloudflare") + " · " + (run.created_at || "")) +
           '</div></div><button class="inline secondary" data-open-run="' + escapeHtml(run.id) + '">Открыть</button></div>';
       }).join("") : '<div class="muted">Прогонов пока нет.</div>';
@@ -1973,6 +2083,10 @@ function panelHtml() {
           Number.isFinite(Number(cf.node_count)) ? "узлов: " + cf.node_count : "",
           Number.isFinite(Number(cf.edge_count)) ? "переходов: " + cf.edge_count : "",
           Number.isFinite(Number(cf.webapp_screenshot_count)) ? "WebApp скриншотов: " + cf.webapp_screenshot_count : "",
+          Number.isFinite(Number(cf.website_screenshot_count)) ? "скриншотов сайта: " + cf.website_screenshot_count : "",
+          cf.target_url ? "url: " + cf.target_url : "",
+          typeof cf.auth_configured === "boolean" ? "auth настроен: " + (cf.auth_configured ? "да" : "нет") : "",
+          typeof cf.auth_confirmed === "boolean" ? "auth подтвержден: " + (cf.auth_confirmed ? "да" : "нет") : "",
           Number.isFinite(Number((run.generated_suite || {}).coverage?.followedActions)) ? "выполнено действий: " + (run.generated_suite || {}).coverage.followedActions : "",
           Number.isFinite(Number((run.generated_suite || {}).coverage?.telegramClicks)) ? "Telegram кликов: " + (run.generated_suite || {}).coverage.telegramClicks : "",
           cf.ai_model ? "AI: " + cf.ai_model : "",
@@ -1993,7 +2107,9 @@ function panelHtml() {
       if (Array.isArray(suite.source_artifacts)) {
         suite.source_artifacts.forEach((name) => docs.push(name));
       }
-      const requiredDocs = isCloudflare
+      const requiredDocs = run.target_type === "website"
+        ? ["website-audit-report.json", "website-ai-review.json", "website-homepage.png"]
+        : isCloudflare
         ? ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "cloudflare-mtproto-report.json"]
         : ["bot-map.json", "bot-map.enriched.json", "generated-test-plan.json", "generated-scenarios.json", "webapp-handoffs.json", "followed-actions.json", "generated-scenario-suite-report.json", "generated-scenario-ai-review.json"];
       requiredDocs.forEach((name) => {
@@ -2005,6 +2121,9 @@ function panelHtml() {
       return '<h2>Документы</h2><div class="list">' + docs.map((name) => {
         const present = (Array.isArray(suite.source_artifacts) && suite.source_artifacts.includes(name)) ||
           suite.report_file === name || ai.report_file === name ||
+          (name === "website-audit-report.json" && suite.website_audit) ||
+          (name === "website-ai-review.json" && ai && Object.keys(ai).length > 0) ||
+          (name === "website-homepage.png" && suite.website_audit?.screenshot) ||
           (name === "bot-map.json" && (suite.bot_map || run.bot_map)) ||
           (name === "webapp-handoffs.json" && Array.isArray(suite.webapp_handoffs) && suite.webapp_handoffs.length > 0) ||
           (name === "followed-actions.json" && Array.isArray(suite.followed_actions) && suite.followed_actions.length > 0) ||
@@ -2089,6 +2208,7 @@ function panelHtml() {
       const flows = Array.isArray(review.flow_map) ? review.flow_map : [];
       const nodes = Array.isArray(map.nodes) ? map.nodes : [];
       const webapps = Array.isArray(suite.webapp_handoffs) ? suite.webapp_handoffs : [];
+      const website = suite.website_audit || null;
       const flowHtml = flows.length ? flows.map((flow) => {
         const branches = Array.isArray(flow.branches) ? flow.branches : [];
         return '<div class="item"><b>' + escapeHtml(flow.name || "flow") + '</b> ' +
@@ -2132,7 +2252,20 @@ function panelHtml() {
           (browser.screenshot_error ? '<div class="error">' + escapeHtml(browser.screenshot_error) + '</div>' : '') +
           '</div>';
       }).join("") : '<h2>WebApp/URL handoff-и</h2><div class="muted">WebApp/URL переходов пока не найдено.</div>';
-      return '<h2>Дерево логики</h2>' + flowHtml + rawHtml + webappHtml;
+      const websiteHtml = website ? '<h2>Сайт / веб-приложение</h2><div class="item">' +
+        '<b>' + escapeHtml(website.title || run.target_url || "Сайт") + '</b> ' +
+        pill(website.authenticated ? "auth ok" : website.auth_configured ? "auth check" : "public") +
+        '<div class="muted mono">' + escapeHtml(website.final_url || run.target_url || "") + '</div>' +
+        '<pre>' + escapeHtml([
+          website.visible_text_summary ? "summary: " + website.visible_text_summary : "",
+          website.auth_status ? "auth: " + website.auth_status : "",
+          Array.isArray(website.main_flows) && website.main_flows.length ? "flows: " + website.main_flows.join(" | ") : "",
+          Array.isArray(website.forms) && website.forms.length ? "forms: " + website.forms.join(" | ") : "",
+          Array.isArray(website.errors_or_blockers) && website.errors_or_blockers.length ? "blockers: " + website.errors_or_blockers.join(" | ") : ""
+        ].filter(Boolean).join("\\n") || "Browser Run пока не вернул разбор сайта.") + '</pre>' +
+        renderScreenshotEvidence(website) +
+        '</div>' : "";
+      return '<h2>Дерево логики</h2>' + flowHtml + websiteHtml + rawHtml + webappHtml;
     }
 
     function renderAi(run) {
@@ -2144,7 +2277,10 @@ function panelHtml() {
       const gaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
       const next = review.next_run || {};
       const facts = review.coverage_facts || suite.coverage_facts || {};
+      const website = suite.website_audit || null;
       const factLines = [
+        facts.targetType ? "тип: " + uiLabel(facts.targetType) : "",
+        facts.targetUrl ? "url: " + facts.targetUrl : "",
         facts.selector ? "режим: " + uiLabel(facts.selector) : "",
         Number.isFinite(Number(facts.reachedDepth)) || Number.isFinite(Number(facts.maxDepth))
           ? "глубина: " + (facts.reachedDepth ?? "?") + "/" + (facts.maxDepth ?? "?")
@@ -2185,6 +2321,13 @@ function panelHtml() {
           '<pre>' + escapeHtml(notes || fallbackText) + '</pre>' +
           renderScreenshotEvidence(browser) + '</div>';
       }).join("") : '<div class="muted">WebApp/URL переходов пока нет.</div>';
+      const websiteHtml = website ? '<div class="item"><b>Сайт / приложение</b><pre>' + escapeHtml([
+        website.title ? "title: " + website.title : "",
+        website.final_url ? "url: " + website.final_url : "",
+        typeof website.authenticated === "boolean" ? "авторизация: " + (website.authenticated ? "успешно/похоже авторизован" : "не подтверждена") : "",
+        website.auth_status ? "auth status: " + website.auth_status : "",
+        Array.isArray(website.qa_notes) && website.qa_notes.length ? "notes: " + website.qa_notes.join(" | ") : ""
+      ].filter(Boolean).join("\\n")) + '</pre>' + renderScreenshotEvidence(website) + '</div>' : "";
       return '<h2>AI-разбор</h2>' +
         '<div class="item"><b>Статус AI</b><pre>' + escapeHtml([
           "enabled: " + Boolean(aiMeta.enabled),
@@ -2195,6 +2338,7 @@ function panelHtml() {
         '<div class="item"><b>Общий взгляд</b><p>' + escapeHtml(overview.summary || "AI-разбора пока нет.") + '</p>' +
         '<div class="muted">' + escapeHtml(overview.business_purpose || overview.product_purpose || "") + '</div></div>' +
         '<div class="item"><b>Факты покрытия</b><pre>' + escapeHtml(factLines.join("\\n") || "Факты покрытия пока не сохранены.") + '</pre></div>' +
+        websiteHtml +
         '<div class="item"><b>Дефекты</b>' + (defects.length ? defects.map((item) => {
           return '<div class="item">' + pill(item.severity || "unknown", statusKind(item.severity)) +
             '<b>' + escapeHtml(item.title || "") + '</b><div class="muted">' + escapeHtml((item.evidence || []).join(" | ")) +
@@ -2209,9 +2353,10 @@ function panelHtml() {
       const run = mergeRunSnapshot(payload.run || {});
       const github = run.github_live || run.github || {};
       const status = github.conclusion || github.status || run.status || "queued";
-      const bot = run.bot_username || "";
-      q("#runTitle").textContent = bot ? bot + " · " + uiLabel(status) : run.id || "Прогон";
+      const target = run.target_url || run.bot_username || "";
+      q("#runTitle").textContent = target ? target + " · " + uiLabel(status) : run.id || "Прогон";
       q("#runMeta").innerHTML = [
+        pill(run.target_type || (run.target_url ? "website" : "telegram_bot")),
         pill(run.suite || "generated_scenarios"),
         pill(run.selector || "smart"),
         pill(run.engine || "cloudflare"),
@@ -2230,7 +2375,12 @@ function panelHtml() {
       q("#tab-tree").innerHTML = renderLogicTree(run);
       q("#tab-branches").innerHTML = renderBranches(run);
       q("#tab-ai").innerHTML = renderAi(run);
+      q("#targetType").value = run.target_type === "website" || run.target_url ? "website" : "telegram_bot";
+      toggleTargetFields();
       if (run.bot_username) q("#botUsername").value = run.bot_username;
+      if (run.target_url) q("#targetUrl").value = run.target_url;
+      if (run.test_objective) q("#testObjective").value = run.test_objective;
+      q("#authInstructions").value = "";
       if (run.start_payload) q("#startPayload").value = run.start_payload;
       if (run.suite) q("#suite").value = run.suite;
       if (run.engine) q("#engine").value = run.engine === "github" ? "github" : "cloudflare";
@@ -2263,8 +2413,12 @@ function panelHtml() {
       setMessage("Запускаю прогон...");
       try {
         const body = {
+          target_type: q("#targetType").value,
           bot_username: q("#botUsername").value.trim(),
+          target_url: q("#targetUrl").value.trim(),
           start_payload: q("#startPayload").value.trim(),
+          test_objective: q("#testObjective").value.trim(),
+          auth_instructions: q("#authInstructions").value.trim(),
           suite: q("#suite").value,
           engine: q("#engine").value,
           selector: selectorOverride || q("#selector").value,
@@ -2327,10 +2481,21 @@ function panelHtml() {
         });
       });
     });
+    q("#targetType").addEventListener("change", toggleTargetFields);
+    q("#suite").addEventListener("change", () => {
+      if (q("#suite").value === "website_audit") {
+        q("#targetType").value = "website";
+      }
+      toggleTargetFields();
+    });
     q("#startRun").addEventListener("click", () => createRun().catch((error) => setMessage(error.message)));
     q("#refresh").addEventListener("click", () => Promise.all([loadRuns(), loadRun()]).catch((error) => setMessage(error.message)));
     q("#cancelRun").addEventListener("click", () => cancelRun().catch((error) => setMessage(error.message)));
     q("#runSelected").addEventListener("click", () => {
+      if (isWebsiteTarget()) {
+        setMessage("Для сайта запускается общий web-аудит, выбор веток не нужен.");
+        return;
+      }
       const ids = qa('#tab-branches input[type="checkbox"]:checked').map((input) => input.value).filter(Boolean);
       if (!ids.length) {
         setMessage("Выбери хотя бы одну ветку.");
@@ -2339,6 +2504,7 @@ function panelHtml() {
       q("#suite").value = "generated_scenarios";
       createRun(ids.join(",")).catch((error) => setMessage(error.message));
     });
+    toggleTargetFields();
     loadRuns().catch((error) => setMessage(error.message));
     if (state.runId) loadRun().catch((error) => setMessage(error.message));
   </script>
@@ -2360,25 +2526,42 @@ async function handlePanelRunCreate(env, request, ctx) {
   }
 
   const body = await request.json().catch(() => ({}));
+  const requestedTargetType = normalizePanelTargetType(body.target_type, body.suite);
+  const suite = requestedTargetType === "website" ? "website_audit" : normalizeSuite(body.suite, "generated_scenarios");
+  const targetType = normalizePanelTargetType(body.target_type, suite);
   const botUsername = normalizeBotUsername(body.bot_username);
-  if (!botUsername) {
+  const targetUrl = normalizeWebsiteUrl(body.target_url);
+  if (targetType === "telegram_bot" && !botUsername) {
     return jsonResponse({ error: "Укажи корректный username бота" }, 400);
   }
+  if (targetType === "website" && !targetUrl) {
+    return jsonResponse({ error: "Укажи корректный URL сайта или веб-приложения" }, 400);
+  }
 
-  const suite = normalizeSuite(body.suite, "generated_scenarios");
-  if (!["generated_scenarios", "discover_mtproto"].includes(suite)) {
-    return jsonResponse({ error: "Панель поддерживает только generated_scenarios и discover_mtproto" }, 400);
+  if (targetType === "telegram_bot" && !["generated_scenarios", "discover_mtproto"].includes(suite)) {
+    return jsonResponse({ error: "Для Telegram панель поддерживает generated_scenarios и discover_mtproto" }, 400);
+  }
+  if (targetType === "website" && suite !== "website_audit") {
+    return jsonResponse({ error: "Для сайта панель поддерживает только website_audit" }, 400);
   }
   const engine = normalizePanelEngine(body.engine, suite);
+  if (targetType === "website" && engine !== "cloudflare") {
+    return jsonResponse({ error: "Сайты и веб-приложения сейчас запускаются через Cloudflare Browser" }, 400);
+  }
   if (engine === "cloudflare" && !isCloudflareNativeSuite(suite)) {
     return jsonResponse({ error: "Cloudflare runner пока поддерживает только generated_scenarios и discover_mtproto" }, 400);
   }
   const defaultSelector = engine === "cloudflare" ? "dev" : "smart";
   const selector = suite === "generated_scenarios" ? String(body.selector || defaultSelector).trim() || defaultSelector : "";
   const maxDrafts = clampNumber(body.max_drafts, engine === "cloudflare" ? 20 : 8, 1, 50);
+  const testObjective = compactPanelText(body.test_objective || "", 1600);
+  const authInstructions = compactPanelText(body.auth_instructions || "", 2000);
   const activeRun = await findActivePanelRun(env, {
+    targetType,
     botUsername,
+    targetUrl,
     startPayload: body.start_payload,
+    testObjective,
     suite,
     selector,
     engine
@@ -2394,8 +2577,12 @@ async function handlePanelRunCreate(env, request, ctx) {
     {
       id: panelRunId,
       status: "queued",
-      bot_username: `@${botUsername}`,
+      target_type: targetType,
+      ...(botUsername ? { bot_username: `@${botUsername}` } : {}),
+      ...(targetUrl ? { target_url: targetUrl } : {}),
       start_payload: String(body.start_payload || "").trim(),
+      test_objective: testObjective,
+      auth_configured: Boolean(authInstructions),
       suite,
       engine,
       selector,
@@ -2406,6 +2593,7 @@ async function handlePanelRunCreate(env, request, ctx) {
     { phase: "создание", status: "queued", message: "Прогон создан из панели" }
   );
   await savePanelRun(env, run);
+  const executionRun = authInstructions ? { ...run, auth_instructions: authInstructions } : run;
 
   if (engine === "cloudflare") {
     if (env.PANEL_RUN_WORKFLOW && typeof env.PANEL_RUN_WORKFLOW.create === "function") {
@@ -2422,7 +2610,7 @@ async function handlePanelRunCreate(env, request, ctx) {
       );
       await savePanelRun(env, run);
 
-      const workflowRun = await createCloudflarePanelWorkflow(env, panelRunId, run);
+      const workflowRun = await createCloudflarePanelWorkflow(env, panelRunId, executionRun);
       run = appendPanelEvent(
         {
           ...run,
@@ -2446,7 +2634,7 @@ async function handlePanelRunCreate(env, request, ctx) {
       { phase: "cloudflare", status: "running", message: "Workflow не настроен, fallback-прогон запущен через waitUntil" }
     );
     await savePanelRun(env, run);
-    const promise = runCloudflarePanelRun(env, panelRunId);
+    const promise = runCloudflarePanelRun(env, panelRunId, executionRun);
     if (ctx && typeof ctx.waitUntil === "function") {
       ctx.waitUntil(promise);
       return jsonResponse({ run });
