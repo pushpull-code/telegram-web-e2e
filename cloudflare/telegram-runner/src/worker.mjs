@@ -2256,8 +2256,9 @@ async function handlePanelRunCreate(env, request, ctx) {
   if (engine === "cloudflare" && !isCloudflareNativeSuite(suite)) {
     return jsonResponse({ error: "Cloudflare runner пока поддерживает только generated_scenarios и discover_mtproto" }, 400);
   }
-  const selector = suite === "generated_scenarios" ? String(body.selector || "smart").trim() || "smart" : "";
-  const maxDrafts = clampNumber(body.max_drafts, 8, 1, 50);
+  const defaultSelector = engine === "cloudflare" ? "dev" : "smart";
+  const selector = suite === "generated_scenarios" ? String(body.selector || defaultSelector).trim() || defaultSelector : "";
+  const maxDrafts = clampNumber(body.max_drafts, engine === "cloudflare" ? 20 : 8, 1, 50);
   const activeRun = await findActivePanelRun(env, {
     botUsername,
     startPayload: body.start_payload,

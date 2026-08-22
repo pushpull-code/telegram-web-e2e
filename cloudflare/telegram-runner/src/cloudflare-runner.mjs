@@ -501,7 +501,8 @@ async function buildBotMap(env, run, shouldStop = async () => false, onProgress 
         maxDepth: options.maxDepth,
         maxNodes: options.maxNodes,
         maxButtonsPerNode: options.maxButtonsPerNode,
-        stateLimit: options.stateLimit
+        stateLimit: options.stateLimit,
+        commands: options.commands
       },
       nodes,
       edges
@@ -1029,6 +1030,48 @@ function followedActionsFromHandoffs(handoffs) {
   });
 }
 
+function nodeEvidenceText(node) {
+  return [
+    ...(Array.isArray(node?.path) ? node.path : []),
+    ...(Array.isArray(node?.tail) ? node.tail.map((message) => message.text) : []),
+    ...(Array.isArray(node?.buttons) ? node.buttons.map((button) => button.text) : []),
+    ...(Array.isArray(node?.skippedButtons) ? node.skippedButtons.map((button) => button.text) : [])
+  ].join("\n");
+}
+
+function buildCoverageFacts(map, { selector, allDrafts, drafts, webappHandoffs }) {
+  const nodes = Array.isArray(map?.nodes) ? map.nodes : [];
+  const edges = Array.isArray(map?.edges) ? map.edges : [];
+  const limits = map?.limits || {};
+  const commandsConfigured = Array.isArray(limits.commands) ? limits.commands : [];
+  const commandSeedsExplored = unique(
+    nodes
+      .map((node) => (Array.isArray(node.path) ? node.path[0] : ""))
+      .filter((label) => commandsConfigured.includes(label))
+  );
+  const reachedDepth = nodes.reduce((max, node) => Math.max(max, Number(node.depth) || 0), 0);
+  const countryRe = /land ändern|country|страна|стран|подтвержд.*стран|confirm.*country|afghanistan|albania|algeria|andorra|germany|deutschland|🇦🇫|🇩🇪/i;
+  const countryChangeNodes = nodes.filter((node) => countryRe.test(nodeEvidenceText(node))).length;
+
+  return {
+    selector: selector || "",
+    nodeCount: nodes.length,
+    edgeCount: edges.length,
+    allDrafts: Array.isArray(allDrafts) ? allDrafts.length : 0,
+    selectedDrafts: Array.isArray(drafts) ? drafts.length : 0,
+    maxDepth: Number(limits.maxDepth) || 0,
+    maxNodes: Number(limits.maxNodes) || 0,
+    reachedDepth,
+    commandsConfigured,
+    commandSeedsExplored,
+    commandSeedsExploredCount: commandSeedsExplored.length,
+    menuCommandsCovered: commandSeedsExplored.length > 0,
+    countryChangeNodes,
+    countryChangeCovered: countryChangeNodes > 0,
+    webappHandoffs: Array.isArray(webappHandoffs) ? webappHandoffs.length : 0
+  };
+}
+
 function buildGeneratedSuite(map, run) {
   const allDrafts = map.nodes.map(draftFromNode);
   const rawSelector = String(run.selector || "smart").trim() || "smart";
@@ -1046,6 +1089,7 @@ function buildGeneratedSuite(map, run) {
   );
   const webappHandoffs = collectWebappHandoffs(map);
   const failed = drafts.filter((draft) => draft.status === "failed").length;
+  const coverageFacts = buildCoverageFacts(map, { selector: rawSelector, allDrafts, drafts, webappHandoffs });
 
   return {
     runner: "cloudflare-mtproto",
@@ -1072,8 +1116,13 @@ function buildGeneratedSuite(map, run) {
       manual: map.nodes.reduce((count, node) => count + (node.skippedButtons || []).length, 0),
       runnableTestAccount: drafts.length,
       limitedOut: selectedIds.length ? 0 : Math.max(0, allDrafts.length - drafts.length),
-      webappHandoffs: webappHandoffs.length
+      webappHandoffs: webappHandoffs.length,
+      maxDepth: coverageFacts.maxDepth,
+      reachedDepth: coverageFacts.reachedDepth,
+      commandsExplored: coverageFacts.commandSeedsExploredCount,
+      countryChangeNodes: coverageFacts.countryChangeNodes
     },
+    coverage_facts: coverageFacts,
     selector: rawSelector,
     selected_ids: selectedIds,
     missing_selected_ids: missingSelectedIds,
@@ -1082,6 +1131,49 @@ function buildGeneratedSuite(map, run) {
     draft_count: drafts.length,
     drafts,
     bot_map: map
+  };
+}
+
+function gapContradictedByFacts(gap, facts) {
+  const text = normalizeText(gap);
+  if (!text) {
+    return true;
+  }
+  if ((/смен|стран|country|land/.test(text)) && facts.countryChangeCovered) {
+    return true;
+  }
+  if ((/команд|меню|command|menu/.test(text)) && facts.menuCommandsCovered) {
+    return true;
+  }
+  if ((/глубин|depth|уров/.test(text)) && (Number(facts.maxDepth) > 1 || Number(facts.reachedDepth) > 1)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeAiReviewResult(review, map, suite) {
+  const fallbackFacts = buildCoverageFacts(map, {
+    selector: suite.selector,
+    allDrafts: suite.drafts || [],
+    drafts: suite.drafts || [],
+    webappHandoffs: suite.webapp_handoffs || []
+  });
+  const facts = suite.coverage_facts || fallbackFacts;
+  const coverageGaps = Array.isArray(review.coverage_gaps) ? review.coverage_gaps : [];
+  const cleanGaps = unique(coverageGaps.filter((gap) => !gapContradictedByFacts(gap, facts)));
+  const nextRun = review.next_run && typeof review.next_run === "object" ? review.next_run : {};
+  return {
+    ...review,
+    coverage_gaps: cleanGaps,
+    next_run: {
+      ...nextRun,
+      recommended_depth: Math.max(
+        Number(nextRun.recommended_depth) || 0,
+        Math.min(8, Math.max(Number(facts.maxDepth) || 0, Number(facts.reachedDepth) || 0))
+      ),
+      recommended_max_nodes: Math.max(Number(nextRun.recommended_max_nodes) || 0, Number(facts.maxNodes) || 0)
+    },
+    coverage_facts: facts
   };
 }
 
@@ -1117,7 +1209,7 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
       severity: review.severity
     }));
 
-  return {
+  return normalizeAiReviewResult({
     overview: {
       summary: `Cloudflare MTProto runner прошел ${map.nodes.length} узл. и ${map.edges.length} переходов для @${map.bot}.`,
       business_purpose: "Определяется по Telegram transcript и кнопкам.",
@@ -1150,7 +1242,7 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
       model: aiMeta.model || "heuristic",
       error: aiMeta.error || ""
     }
-  };
+  }, map, suite);
 }
 
 function extractJsonObject(text) {
@@ -1205,6 +1297,10 @@ async function aiReview(env, map, suite) {
             "Keep each string under 180 characters, arrays under 5 items, and avoid long paragraphs.",
             "Use webapp_handoffs as evidence for URL/WebApp branches. If Browser Run could not inspect a handoff, mark it as missing evidence.",
             "Use followed_actions as evidence of what the QA runner actually clicked/opened. Distinguish Telegram button click from Browser-only WebApp inspection.",
+            "Use coverage_facts as truth. Do not list gaps contradicted by coverage_facts.",
+            "Do not say country change was untested when coverage_facts.countryChangeCovered is true.",
+            "Do not say menu commands were unexplored when coverage_facts.menuCommandsCovered is true.",
+            "Do not say depth is limited to one level when coverage_facts.maxDepth or reachedDepth is greater than 1.",
             "Use this json shape exactly:",
             '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
           ].join(" ")
@@ -1247,6 +1343,7 @@ async function aiReview(env, map, suite) {
             generatedSuite: {
               summary: suite.summary,
               coverage: suite.coverage,
+              coverage_facts: suite.coverage_facts,
               webapp_handoffs: suite.webapp_handoffs,
               followed_actions: suite.followed_actions,
               missing_selected_ids: suite.missing_selected_ids,
@@ -1291,7 +1388,7 @@ async function aiReview(env, map, suite) {
     if (!parsed || typeof parsed !== "object") {
       throw new Error(`AI returned non-JSON review: ${compactText(content || "[empty]", 300)}`);
     }
-    return {
+    return normalizeAiReviewResult({
       ...fallbackAiReview(map, suite, { model }),
       ...parsed,
       ai: {
@@ -1299,7 +1396,7 @@ async function aiReview(env, map, suite) {
         provider: baseUrl,
         model
       }
-    };
+    }, map, suite);
   } catch (error) {
     return fallbackAiReview(map, suite, {
       provider: baseUrl,
@@ -1372,6 +1469,13 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
     webappScreenshots: webappScreenshots.length,
     followedActions: generatedSuite.followed_actions.length,
     telegramClicks: generatedSuite.followed_actions.filter((action) => action.type === "telegram_button_click").length
+  };
+  generatedSuite.coverage_facts = {
+    ...generatedSuite.coverage_facts,
+    webappHandoffsAudited: generatedSuite.coverage.webappHandoffsAudited,
+    webappScreenshots: generatedSuite.coverage.webappScreenshots,
+    followedActions: generatedSuite.coverage.followedActions,
+    telegramClicks: generatedSuite.coverage.telegramClicks
   };
   await notifyProgress(onProgress, {
     phase: "ai",
