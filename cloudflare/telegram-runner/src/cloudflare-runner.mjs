@@ -108,19 +108,41 @@ function countryNameFromCode(code) {
   }
 }
 
+function countryDisplayNamesFromCode(code) {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalized)) {
+    return [];
+  }
+  return unique(
+    ["en", "de", "ru", "es", "fr", "it", "pt", "nl", "pl", "uk"].map((locale) => {
+      try {
+        return new Intl.DisplayNames([locale], { type: "region" }).of(normalized) || "";
+      } catch (_) {
+        return "";
+      }
+    })
+  );
+}
+
 function countryAliasCandidates(country) {
   const code = String(country?.countryCode || "").trim().toUpperCase();
   const name = normalizeCountryText(country?.countryName || country?.country || "");
   return unique([
     name,
-    countryNameFromCode(code),
+    ...countryDisplayNamesFromCode(code),
     code === "US" ? "United States" : "",
     code === "US" ? "USA" : "",
     code === "US" ? "United States of America" : "",
     code === "GB" ? "United Kingdom" : "",
     code === "GB" ? "Great Britain" : "",
     code === "DE" ? "Germany" : "",
-    code === "RU" ? "Russia" : ""
+    code === "DE" ? "Deutschland" : "",
+    code === "RU" ? "Russia" : "",
+    code === "RU" ? "Россия" : "",
+    code === "PL" ? "Poland" : "",
+    code === "PL" ? "Polen" : "",
+    code === "PL" ? "Polska" : "",
+    code === "PL" ? "Польша" : ""
   ]).filter(Boolean);
 }
 
@@ -167,6 +189,18 @@ function isCountryOptionButton(button) {
   return /[\u{1F1E6}-\u{1F1FF}]/u.test(String(button?.text || "")) && !button?.url;
 }
 
+function isCountryPagerButton(button) {
+  if (!String(button?.text || "").trim() || button?.url || isCountryOptionButton(button)) {
+    return false;
+  }
+  const raw = String(button.text || "").trim();
+  const text = normalizeText(raw);
+  return (
+    /^(>|>>|›|»|➡|➡️|⏭|⏭️)$/.test(raw) ||
+    /next|weiter|vorwärts|следующ|далее|впер[её]д|mehr|more/.test(text)
+  );
+}
+
 function isCountrySelectionContext(messages, buttons) {
   const text = normalizeText((messages || []).map((message) => message?.text || "").join("\n"));
   const countryButtonCount = (buttons || []).filter(isCountryOptionButton).length;
@@ -200,6 +234,51 @@ function sampleCountryButtons(buttons, options) {
       skipReason: "long_country_list_sampled"
     };
   });
+}
+
+function latestButtonSearchMessages(messages) {
+  const currentMessages = messagesAfterLastOutgoing(messages || []);
+  return currentMessages.length > 0 ? currentMessages : messages || [];
+}
+
+function visibleCountryButtons(messages) {
+  const result = [];
+  for (let messageIndex = (messages || []).length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message?.outgoing) {
+      continue;
+    }
+    for (const row of messageButtonRows(message)) {
+      for (const button of row) {
+        if (isCountryOptionButton(button)) {
+          result.push({ ...button, messageId: Number(message.id) || 0 });
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function visibleButtonTexts(messages, limit = 12) {
+  const texts = [];
+  for (let messageIndex = (messages || []).length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message?.outgoing) {
+      continue;
+    }
+    for (const row of messageButtonRows(message)) {
+      for (const button of row) {
+        const text = compactText(button?.text || "", 80);
+        if (text) {
+          texts.push(text);
+        }
+        if (texts.length >= limit) {
+          return texts;
+        }
+      }
+    }
+  }
+  return texts;
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs) {
@@ -764,6 +843,7 @@ function discoveryOptions(env, run) {
       .split(/[,\n]+/g)
       .map((command) => command.trim())
       .filter(Boolean),
+    countryPageLimit: clampNumber(env.MTPROTO_DEVICE_COUNTRY_PAGE_LIMIT, 12, 1, 40),
     expectedCountryName: normalizeCountryText(env.MTPROTO_DEVICE_COUNTRY_NAME || env.MTPROTO_DISCOVERY_EXPECTED_COUNTRY_NAME || ""),
     expectedCountryCode: String(env.MTPROTO_DEVICE_COUNTRY_CODE || env.MTPROTO_DISCOVERY_EXPECTED_COUNTRY_CODE || "").trim().toUpperCase()
   };
@@ -1286,6 +1366,100 @@ async function readProfileState(env, peer, options) {
   };
 }
 
+async function clickCountryButtonWithPaging(env, peer, options, expectedCountry, onProgress) {
+  const maxPages = clampNumber(options.countryPageLimit, 12, 1, 40);
+  const pages = [];
+  const visited = new Set();
+  const expectedLabel = expectedCountry.countryName || expectedCountry.countryCode || "country";
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const state = await getMtprotoChatState(env, peer, options.stateLimit);
+    const messages = latestButtonSearchMessages(state.messages || []);
+    const countryButtons = visibleCountryButtons(messages);
+    const visible = countryButtons.map((button) => compactText(button.text || "", 80));
+    const signature = visible.join("|") || visibleButtonTexts(messages, 20).join("|");
+    pages.push({
+      page,
+      country_count: countryButtons.length,
+      sample: visible.slice(0, 12)
+    });
+
+    await notifyProgress(onProgress, {
+      phase: "country",
+      message: countryButtons.length
+        ? `Страны на странице ${page}: ${visible.slice(0, 6).join(", ")}`
+        : `Страница ${page}: кнопки ${visibleButtonTexts(messages, 6).join(", ") || "не найдены"}`
+    });
+
+    const foundCountry = findLatestMtprotoButtonWhere(messages, (button) => countryButtonMatches(button, expectedCountry));
+    if (foundCountry) {
+      const click = await clickMtprotoButton(env, peer, foundCountry.message.id, {
+        rowIndex: foundCountry.button.rowIndex,
+        columnIndex: foundCountry.button.columnIndex,
+        ...(foundCountry.button.dataBase64 ? { buttonDataBase64: foundCountry.button.dataBase64 } : {}),
+        buttonText: foundCountry.button.text,
+        allowTimeoutAsSuccess: true,
+        clickTimeoutMs: options.clickTimeoutMs
+      });
+      await sleep(options.settleMs);
+      return {
+        status: "success",
+        pages,
+        activeAfterMessageId: Number(foundCountry.message.id) - 1,
+        message: compactMessage(foundCountry.message),
+        button: {
+          text: String(foundCountry.button.text || ""),
+          url: foundCountry.button.url || "",
+          type: foundCountry.button.type || "",
+          rowIndex: foundCountry.button.rowIndex,
+          columnIndex: foundCountry.button.columnIndex
+        },
+        click: serializeClickEvidence(click)
+      };
+    }
+
+    if (signature && visited.has(signature)) {
+      return {
+        status: "blocked",
+        pages,
+        error: `Country list repeated before finding ${expectedLabel}.`
+      };
+    }
+    if (signature) {
+      visited.add(signature);
+    }
+
+    const pager = findLatestMtprotoButtonWhere(messages, isCountryPagerButton);
+    if (!pager) {
+      return {
+        status: "blocked",
+        pages,
+        error: `Country ${expectedLabel} was not found in visible country buttons.`
+      };
+    }
+
+    await notifyProgress(onProgress, {
+      phase: "country",
+      message: `Листаю список стран: ${compactText(pager.button.text || "", 40)}`
+    });
+    await clickMtprotoButton(env, peer, pager.message.id, {
+      rowIndex: pager.button.rowIndex,
+      columnIndex: pager.button.columnIndex,
+      ...(pager.button.dataBase64 ? { buttonDataBase64: pager.button.dataBase64 } : {}),
+      buttonText: pager.button.text,
+      allowTimeoutAsSuccess: true,
+      clickTimeoutMs: options.clickTimeoutMs
+    });
+    await sleep(options.settleMs);
+  }
+
+  return {
+    status: "blocked",
+    pages,
+    error: `Country ${expectedLabel} was not found after ${maxPages} country pages.`
+  };
+}
+
 async function ensureProfileCountry(env, peer, options, expectedCountry, onProgress) {
   const before = await readProfileState(env, peer, options);
   const result = {
@@ -1299,6 +1473,12 @@ async function ensureProfileCountry(env, peer, options, expectedCountry, onProgr
     result.error = "Expected country could not be detected.";
     return result;
   }
+  await notifyProgress(onProgress, {
+    phase: "country",
+    message: before.country
+      ? `Страна профиля сейчас: ${before.country}`
+      : "Страна профиля сейчас не найдена в /settings"
+  });
   if (before.country && countriesMatch(before.country, expectedCountry)) {
     result.status = "success";
     return result;
@@ -1308,26 +1488,48 @@ async function ensureProfileCountry(env, peer, options, expectedCountry, onProgr
     phase: "country",
     message: `Выбираю страну профиля: ${expectedCountry.countryName || expectedCountry.countryCode}`
   });
-  const changeClick = await clickLatestButtonWhere(
-    env,
-    peer,
-    (button) => CHANGE_COUNTRY_RE.test(String(button?.text || "")),
-    options,
-    "change country"
-  );
-  const countryClick = await clickLatestButtonWhere(
-    env,
-    peer,
-    (button) => countryButtonMatches(button, expectedCountry),
-    options,
-    expectedCountry.countryName || expectedCountry.countryCode
-  );
+  let changeClick;
+  try {
+    changeClick = await clickLatestButtonWhere(
+      env,
+      peer,
+      (button) => CHANGE_COUNTRY_RE.test(String(button?.text || "")),
+      options,
+      "change country"
+    );
+  } catch (error) {
+    result.status = "blocked";
+    result.error = `Country change button was not found: ${error instanceof Error ? error.message : String(error)}`;
+    return result;
+  }
+  await notifyProgress(onProgress, {
+    phase: "country",
+    message: `Открыл выбор страны: ${compactText(changeClick.button?.text || "", 80)}`
+  });
+
+  const countryClick = await clickCountryButtonWithPaging(env, peer, options, expectedCountry, onProgress);
+  if (countryClick.status !== "success") {
+    result.status = "blocked";
+    result.change_country_click = changeClick;
+    result.country_click = countryClick;
+    result.country_pages = countryClick.pages || [];
+    result.error = countryClick.error || `Country ${expectedCountry.countryName || expectedCountry.countryCode} was not found.`;
+    return result;
+  }
   const after = await readProfileState(env, peer, options);
   result.changed = true;
   result.change_country_click = changeClick;
   result.country_click = countryClick;
+  result.country_pages = countryClick.pages || [];
   result.selected_country_after = after.country;
   result.status = after.country && countriesMatch(after.country, expectedCountry) ? "success" : "blocked";
+  await notifyProgress(onProgress, {
+    phase: "country",
+    status: result.status === "success" ? "success" : "failure",
+    message: after.country
+      ? `Страна после выбора: ${after.country}`
+      : "После выбора страна в /settings не найдена"
+  });
   if (result.status !== "success") {
     result.error = `Selected country after change is "${after.country || "unknown"}".`;
   }
@@ -1382,6 +1584,12 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
   }
 
   if (result.profile_country.status !== "success") {
+    result.error = result.profile_country.error || "Profile country does not match current IP country.";
+    await notifyProgress(onProgress, {
+      phase: "country",
+      status: "failure",
+      message: `Страна не подтверждена: ${result.error}`
+    });
     return {
       ...result,
       status: "blocked"
@@ -1411,6 +1619,9 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
       enabled: false,
       reason: "Device-check link was not found in Telegram message links/buttons."
     };
+    if (result.status === "blocked") {
+      result.error = result.device_check.reason;
+    }
     return result;
   }
 
@@ -1430,6 +1641,18 @@ async function runCountryDevicePreflight(env, run, shouldStop, onProgress = null
     tail: activeIncomingMessages(finalState.messages || null, null).slice(-4).map(compactMessage)
   };
   result.status = result.device_check.ok && !finalBlocked ? "success" : "blocked";
+  if (result.status === "blocked") {
+    result.error = finalBlocked
+      ? "/join_task is still blocked after device check."
+      : "Device-check page was not opened successfully.";
+  }
+  await notifyProgress(onProgress, {
+    phase: "country",
+    status: result.status === "success" ? "success" : "failure",
+    message: result.status === "success"
+      ? "/join_task разблокирован после device-check"
+      : `Device-check не разблокировал задачи: ${result.error}`
+  });
   return result;
 }
 
@@ -1901,6 +2124,186 @@ function fallbackAiReview(map, suite, aiMeta = {}) {
   }, map, suite);
 }
 
+function countryPreflightFailureReason(preflight) {
+  if (!preflight) {
+    return "Country/device preflight did not run.";
+  }
+  const profile = preflight.profile_country || {};
+  const check = preflight.device_check || {};
+  if (preflight.error) {
+    return preflight.error;
+  }
+  if (profile.error) {
+    return profile.error;
+  }
+  if (check.json_error) {
+    return check.json_error;
+  }
+  if (check.screenshot_error) {
+    return check.screenshot_error;
+  }
+  if (preflight.join_task_after_check?.confirmation_blocker) {
+    return "/join_task is still blocked after device check.";
+  }
+  if (!preflight.device_check_target && preflight.join_task_before_check?.confirmation_blocker) {
+    return "Device-check link was not found while /join_task is blocked.";
+  }
+  return "Country/device preflight did not confirm access to tasks.";
+}
+
+function buildCountryPreflightBlockedResult(run, preflight, startedAt) {
+  const reason = countryPreflightFailureReason(preflight);
+  const bot = normalizeBotUsername(run.bot_username);
+  const tail = [
+    ...(preflight?.join_task_before_check?.tail || []),
+    ...(preflight?.join_task_after_check?.tail || [])
+  ].slice(-8);
+  const map = {
+    schemaVersion: 1,
+    runner: "cloudflare-mtproto-preflight",
+    generatedAtIso: nowIso(),
+    bot,
+    startPayload: String(run.start_payload || "").trim(),
+    limits: {
+      maxDepth: 0,
+      maxNodes: 1,
+      preflight: "country_device"
+    },
+    nodes: [
+      {
+        id: "country-device-preflight",
+        depth: 0,
+        path: ["country/device preflight"],
+        observedAtIso: nowIso(),
+        messageWindow: {
+          limit: 0,
+          count: tail.length,
+          firstId: tail[0]?.id ?? null,
+          lastId: tail.at(-1)?.id ?? null,
+          activeAfterMessageId: null,
+          activeCount: tail.length
+        },
+        tail,
+        buttons: [],
+        skippedButtons: [],
+        error: reason
+      }
+    ],
+    edges: []
+  };
+  const screenshotArtifact = preflight?.device_check?.screenshot?.artifact_name || "";
+  const suite = {
+    runner: "cloudflare-mtproto",
+    report_file: "cloudflare-mtproto-report.json",
+    source_artifacts: unique([
+      "country-device-preflight.json",
+      ...(screenshotArtifact ? [screenshotArtifact] : []),
+      "cloudflare-mtproto-report.json"
+    ]),
+    summary: {
+      total: 1,
+      passed: 0,
+      failed: 1,
+      warning: 0,
+      flaky: 0,
+      notRun: 0
+    },
+    coverage: {
+      discovered: 1,
+      selected: 1,
+      manual: 0,
+      runnableTestAccount: 0,
+      limitedOut: 0,
+      webappHandoffs: 0,
+      maxDepth: 0,
+      reachedDepth: 0,
+      commandsExplored: 0,
+      countryChangeNodes: preflight?.profile_country?.changed ? 1 : 0,
+      countryDevicePreflight: 0,
+      deviceCheckLinkFound: preflight?.device_check_target ? 1 : 0,
+      deviceCheckBrowserRuns: preflight?.device_check?.ok ? 1 : 0
+    },
+    coverage_facts: {
+      maxDepth: 0,
+      reachedDepth: 0,
+      maxNodes: 1,
+      commandSeedsExploredCount: 0,
+      commandSeedsExplored: [],
+      menuCommandsCovered: false,
+      countryChangeNodes: preflight?.profile_country?.changed ? 1 : 0,
+      countryChangeCovered: Boolean(preflight?.profile_country?.changed),
+      webappHandoffs: 0,
+      expectedCountry: preflight?.expected_country?.countryName || "",
+      expectedCountryCode: preflight?.expected_country?.countryCode || "",
+      selectedCountryBefore: preflight?.profile_country?.selected_country_before || "",
+      selectedCountryAfter: preflight?.profile_country?.selected_country_after || "",
+      countryDevicePreflightStatus: preflight?.status || "blocked",
+      deviceCheckLinkFound: Boolean(preflight?.device_check_target),
+      deviceCheckBrowserRun: Boolean(preflight?.device_check?.ok),
+      joinTaskUnblocked: preflight?.join_task_after_check
+        ? !preflight.join_task_after_check.confirmation_blocker
+        : false
+    },
+    selector: String(run.selector || "smart").trim() || "smart",
+    selected_ids: [],
+    missing_selected_ids: [],
+    webapp_handoffs: [],
+    followed_actions: [],
+    draft_count: 1,
+    drafts: [
+      {
+        id: "country-device-preflight",
+        status: "failed",
+        scenario: "country/device preflight",
+        source_type: "cloudflare-mtproto",
+        ai_severity: "high",
+        first_error: reason,
+        step_count: 1,
+        passed_steps: 0,
+        warning_steps: 0,
+        failed_steps: 1,
+        attempts: 1,
+        node_id: "country-device-preflight",
+        path: ["country/device preflight"],
+        safety: "cloudflare-mtproto",
+        reason: "Перед выдачей задачи бот требует совпадение страны профиля и IP проверки устройства.",
+        scenario_definition: {
+          name: "country-device-preflight",
+          steps: [
+            {
+              name: "confirm profile country by current IP",
+              expectTextAny: [reason]
+            }
+          ]
+        }
+      }
+    ],
+    bot_map: map,
+    country_device_preflight: preflight
+  };
+  const review = fallbackAiReview(map, suite, { error: reason });
+  return {
+    status: "failure",
+    error: reason,
+    completed_at: nowIso(),
+    duration_sec: Math.round((Date.now() - startedAt) / 1000),
+    bot_map: map,
+    generated_suite: suite,
+    generated_suite_ai_review: review,
+    country_device_preflight: preflight,
+    screenshot_count: screenshotArtifact ? 1 : 0,
+    cloudflare_run: {
+      runner: "cloudflare-mtproto",
+      node_count: 1,
+      edge_count: 0,
+      webapp_screenshot_count: screenshotArtifact ? 1 : 0,
+      device_preflight_status: preflight?.status || "blocked",
+      blocked_by: "country_device_preflight",
+      ai_enabled: false
+    }
+  };
+}
+
 function extractJsonObject(text) {
   const raw = String(text || "").trim();
   if (!raw) {
@@ -2099,6 +2502,15 @@ export async function executeCloudflareNativeRun(env, run, options = {}) {
         ? "Country/device preflight пройден"
         : "Country/device preflight не подтвердил доступ к задачам"
     });
+    if (countryDevicePreflight.status === "blocked") {
+      const blockedResult = buildCountryPreflightBlockedResult(run, countryDevicePreflight, startedAt);
+      await notifyProgress(onProgress, {
+        phase: "country",
+        status: "failure",
+        message: `Прогон остановлен: ${blockedResult.error}`
+      });
+      return blockedResult;
+    }
   }
   const discovery = await buildBotMap(env, run, shouldStop, onProgress);
   if (discovery.cancelled) {

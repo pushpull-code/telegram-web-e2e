@@ -29,6 +29,7 @@ const PANEL_TERMINAL_STATUSES = new Set([
   "failed",
   "completed",
   "cancelled",
+  "blocked",
   "timed_out",
   "skipped",
   "dispatch_failed",
@@ -311,10 +312,16 @@ function isActivePanelRun(run) {
 }
 
 function samePanelRunRequest(run, criteria) {
-  return (
+  const sameBase =
     normalizeBotUsername(run?.bot_username) === normalizeBotUsername(criteria?.botUsername) &&
     String(run?.start_payload || "").trim() === String(criteria?.startPayload || "").trim() &&
     String(run?.suite || "").trim() === String(criteria?.suite || "").trim() &&
+    normalizePanelEngine(run?.engine, run?.suite) === normalizePanelEngine(criteria?.engine, criteria?.suite);
+  if (sameBase && normalizePanelEngine(run?.engine, run?.suite) === "cloudflare") {
+    return true;
+  }
+  return (
+    sameBase &&
     String(run?.selector || "").trim() === String(criteria?.selector || "").trim() &&
     normalizePanelEngine(run?.engine, run?.suite) === normalizePanelEngine(criteria?.engine, criteria?.suite)
   );
@@ -1895,16 +1902,28 @@ function panelHtml() {
       const target = preflight.device_check_target || {};
       const check = preflight.device_check || {};
       const after = preflight.join_task_after_check || {};
+      const countryClick = profile.country_click || {};
+      const countryPages = Array.isArray(profile.country_pages) ? profile.country_pages : [];
+      const countryPageSummary = countryPages
+        .slice(0, 5)
+        .map((page) => {
+          const sample = Array.isArray(page.sample) ? page.sample.slice(0, 5).join(", ") : "";
+          return "стр. " + page.page + ": " + (sample || "нет стран");
+        })
+        .join("\\n");
       const lines = [
         "статус: " + uiLabel(preflight.status || "unknown"),
         expected.countryName || expected.countryCode ? "IP-страна: " + [expected.countryName, expected.countryCode].filter(Boolean).join(" / ") : "",
         expected.source ? "источник страны: " + expected.source : "",
         profile.selected_country_before ? "страна до: " + profile.selected_country_before : "",
+        countryClick.button?.text ? "нажата страна: " + countryClick.button.text : "",
         profile.selected_country_after ? "страна после: " + profile.selected_country_after : "",
         profile.changed ? "страна изменена: да" : "",
+        countryPageSummary ? "просмотренные страны:\\n" + countryPageSummary : "",
         target.url ? "check-link: " + target.url : "check-link: не найден",
         check.ok ? "check-page: открыта" : check.reason || check.json_error ? "check-page: " + (check.reason || check.json_error) : "",
         typeof after.confirmation_blocker === "boolean" ? "join_task после проверки: " + (after.confirmation_blocker ? "всё ещё заблокирован" : "разблокирован") : "",
+        preflight.error ? "ошибка preflight: " + preflight.error : "",
         profile.error ? "ошибка страны: " + profile.error : ""
       ].filter(Boolean);
       return '<div class="item"><b>Country/device preflight</b> ' +
@@ -2239,6 +2258,27 @@ function panelHtml() {
       if (!state.runId || state.cancelling) return;
       setCancelBusy(true);
       setMessage("Отправляю отмену...");
+      if (state.latestRun) {
+        const optimistic = {
+          ...state.latestRun,
+          status: "cancel_requested",
+          cloudflare_progress: {
+            phase: "отмена",
+            status: "cancel_requested",
+            message: "Отмена отправляется..."
+          },
+          events: [
+            ...(state.latestRun.events || []),
+            {
+              time: new Date().toISOString(),
+              phase: "отмена",
+              status: "cancel_requested",
+              message: "Отмена отправляется..."
+            }
+          ].slice(-50)
+        };
+        renderRun(optimistic);
+      }
       try {
         const payload = await api("/api/runs/" + encodeURIComponent(state.runId) + "/cancel", { method: "POST" });
         await loadRuns();
