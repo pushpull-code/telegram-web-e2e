@@ -682,12 +682,18 @@ async function aiReview(env, map, suite) {
   const body = {
     model,
     temperature: 0.2,
+    response_format: { type: "json_object" },
     max_tokens: clampNumber(env.AI_MAX_TOKENS, 4000, 800, 8000),
     messages: [
       {
         role: "system",
         content:
-          "You are a senior QA analyst for Telegram bots. Return only compact valid JSON. Explain the whole bot, every branch purpose, expected behavior, defects, risks, and next run."
+          [
+            "You are a senior QA analyst for Telegram bots.",
+            "Return only valid compact JSON. Do not include markdown, prose, code fences, or comments.",
+            "Use this JSON shape exactly:",
+            '{"overview":{"summary":"строка","business_purpose":"строка","main_flows":["строка"],"risks":["строка"],"next_steps":["строка"]},"flow_map":[{"name":"строка","purpose":"строка","criticality":"low","branches":["строка"]}],"branch_reviews":[{"draft_id":"строка","node_id":"строка","path":["строка"],"intended_behavior":"строка","observed_behavior":"строка","defects":["строка"],"severity":"low","missing_evidence":["строка"]}],"defects":[{"title":"строка","evidence":["строка"],"severity":"low"}],"coverage_gaps":["строка"],"next_run":{"recommended_depth":2,"recommended_max_nodes":12,"focus_branches":["строка"],"engine":"cloudflare-browser-run"}}'
+          ].join(" ")
       },
       {
         role: "user",
@@ -738,6 +744,9 @@ async function aiReview(env, map, suite) {
       }
     ]
   };
+  if (baseUrl.includes("deepseek.com")) {
+    body.thinking = { type: "disabled" };
+  }
 
   try {
     const controller = new AbortController();

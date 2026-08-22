@@ -1151,10 +1151,22 @@ async function isPanelRunCancelled(env, id) {
   return ["cancelled", "cancel_requested"].includes(String(current?.status || "").trim().toLowerCase());
 }
 
-async function runCloudflarePanelRun(env, panelRunId) {
-  let run = await loadPanelRun(env, panelRunId);
+async function runCloudflarePanelRun(env, panelRunId, fallbackRun = null) {
+  const loadedRun = await loadPanelRun(env, panelRunId);
+  let run =
+    loadedRun && fallbackRun
+      ? {
+          ...fallbackRun,
+          ...loadedRun,
+          workflow_instance_id: loadedRun.workflow_instance_id || fallbackRun.workflow_instance_id,
+          workflow_status: loadedRun.workflow_status || fallbackRun.workflow_status
+        }
+      : loadedRun || fallbackRun;
   if (!run || !env.BOT_STATE_KV) {
     return;
+  }
+  if (!loadedRun && fallbackRun) {
+    await savePanelRun(env, run);
   }
 
   run = appendPanelEvent(
@@ -1230,7 +1242,7 @@ function cloudflareWorkflowInstanceId(panelRunId) {
   return String(panelRunId || "").trim();
 }
 
-async function createCloudflarePanelWorkflow(env, panelRunId) {
+async function createCloudflarePanelWorkflow(env, panelRunId, runPayload) {
   const workflow = env.PANEL_RUN_WORKFLOW;
   if (!workflow || typeof workflow.create !== "function") {
     return null;
@@ -1238,7 +1250,7 @@ async function createCloudflarePanelWorkflow(env, panelRunId) {
   const workflowInstanceId = cloudflareWorkflowInstanceId(panelRunId);
   const instance = await workflow.create({
     id: workflowInstanceId,
-    params: { panelRunId }
+    params: { panelRunId, run: runPayload || null }
   });
   const details = await instance.status().catch(() => null);
   return {
@@ -1267,7 +1279,8 @@ export class TelegramE2ERunWorkflow extends WorkflowEntrypoint {
       "execute cloudflare mtproto run",
       { retries: { limit: 1, delay: "5 seconds", backoff: "linear" } },
       async () => {
-        await runCloudflarePanelRun(this.env, panelRunId);
+        const fallbackRun = event?.payload?.run && typeof event.payload.run === "object" ? event.payload.run : null;
+        await runCloudflarePanelRun(this.env, panelRunId, fallbackRun);
         const run = await loadPanelRun(this.env, panelRunId);
         return {
           panelRunId,
@@ -1927,8 +1940,21 @@ async function handlePanelRunCreate(env, request, ctx) {
   await savePanelRun(env, run);
 
   if (engine === "cloudflare") {
-    const workflowRun = await createCloudflarePanelWorkflow(env, panelRunId);
-    if (workflowRun) {
+    if (env.PANEL_RUN_WORKFLOW && typeof env.PANEL_RUN_WORKFLOW.create === "function") {
+      const workflowInstanceId = cloudflareWorkflowInstanceId(panelRunId);
+      run = appendPanelEvent(
+        {
+          ...run,
+          status: "running",
+          workflow_instance_id: workflowInstanceId,
+          workflow_status: "creating",
+          updated_at: nowIso()
+        },
+        { phase: "workflow", status: "creating", message: "Cloudflare Workflow подготавливается" }
+      );
+      await savePanelRun(env, run);
+
+      const workflowRun = await createCloudflarePanelWorkflow(env, panelRunId, run);
       run = appendPanelEvent(
         {
           ...run,
@@ -2054,19 +2080,19 @@ async function handlePanelRunCancel(env, request, id) {
     const next = appendPanelEvent(
       {
         ...refreshed,
-        status: terminated ? "cancelled" : "cancel_requested",
+        status: "cancelled",
         workflow_status: terminated ? "terminated" : refreshed.workflow_status,
         updated_at: nowIso(),
-        ...(terminated ? { completed_at: nowIso() } : {}),
+        completed_at: nowIso(),
         ...(terminateError ? { cancel_error: terminateError } : {})
       },
       {
         phase: "отмена",
-        status: terminated ? "cancelled" : "cancel_requested",
+        status: "cancelled",
         message: terminated
           ? "Cloudflare Workflow остановлен"
           : terminateError
-            ? `Не удалось остановить Cloudflare Workflow: ${terminateError}`
+            ? `Отмена сохранена; Cloudflare terminate вернул ошибку: ${terminateError}`
             : "Отмена сохранена, Cloudflare runner остановится при следующей проверке"
       }
     );
