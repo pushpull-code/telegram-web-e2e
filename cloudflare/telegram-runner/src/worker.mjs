@@ -397,6 +397,24 @@ async function refreshPanelRunTerminalState(env, run) {
             workflow_output_status: outputStatus
           };
         }
+        const freshBeforeTerminalSave = await loadPanelRun(env, run.id).catch(() => null);
+        if (
+          freshBeforeTerminalSave &&
+          (isTerminalPanelRun(freshBeforeTerminalSave) ||
+            freshBeforeTerminalSave.cloudflare_run ||
+            freshBeforeTerminalSave.generated_suite ||
+            freshBeforeTerminalSave.bot_map)
+        ) {
+          const next = {
+            ...freshBeforeTerminalSave,
+            workflow_status: details.status,
+            workflow_output_status: outputStatus,
+            completed_at: freshBeforeTerminalSave.completed_at || nowIso(),
+            updated_at: nowIso()
+          };
+          await savePanelRun(env, next);
+          return next;
+        }
         const nextStatus = PANEL_TERMINAL_STATUSES.has(outputStatus) ? outputStatus : "completed";
         const workflowError =
           details.output?.error ||
