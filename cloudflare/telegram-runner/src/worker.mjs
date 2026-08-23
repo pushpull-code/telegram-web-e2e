@@ -470,6 +470,15 @@ async function refreshPanelRunTerminalState(env, run) {
         const outputStatus = String(details.output?.status || "").trim();
         const sourceHasResult = Boolean(sourceRun.cloudflare_run || sourceRun.generated_suite || sourceRun.bot_map);
         const workflowOutputHasResult = details.output?.has_result === true;
+        if (!sourceHasResult && workflowOutputHasResult) {
+          return {
+            ...sourceRun,
+            status: "syncing_result",
+            workflow_status: details.status,
+            workflow_output_status: outputStatus,
+            workflow_output_debug: compactPanelJson(details.output)
+          };
+        }
         if (!sourceHasResult && !workflowOutputHasResult && (outputStatus === "success" || details.output?.has_result === false)) {
           return {
             ...sourceRun,
